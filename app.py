@@ -1035,7 +1035,7 @@ html, body {{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretend
 
 <script>
 var script = document.createElement('script');
-script.src = '//dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_js_key}&libraries=clusterer&autoload=false';
+script.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_js_key}&libraries=clusterer&autoload=false';
 script.onload = function() {{ kakao.maps.load(initMap); }};
 document.head.appendChild(script);
 
