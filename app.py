@@ -932,6 +932,11 @@ with tab_map:
 <style>
 html, body {{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretendard','Malgun Gothic',sans-serif; }}
 #container {{ display:flex; width:100%; height:100%; }}
+@media (max-width: 768px) {{
+    #container {{ flex-direction:column; }}
+    #list-panel {{ width:100%; min-width:100%; height:180px; min-height:180px; border-right:none; border-bottom:1px solid #ececef; }}
+    #map-wrap {{ height:400px; }}
+}}
 #list-panel {{
     width:262px; min-width:262px; height:100%; overflow-y:auto;
     background:#fafafa; border-right:1px solid #ececef;
