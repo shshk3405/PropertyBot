@@ -792,7 +792,8 @@ with tab_list:
                                 changed += 1
                             except Exception:
                                 pass
-                    st.success(f"✅ {changed}건 업데이트") if changed else st.info("변경사항이 없어요.")
+                    if changed: st.success(f"✅ {changed}건 업데이트")
+                    else: st.info("변경사항이 없어요.")
                     if changed:
                         st.cache_data.clear(); st.rerun()
             with ca2:
