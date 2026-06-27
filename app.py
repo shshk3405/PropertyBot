@@ -41,7 +41,7 @@ RTMS_ENDPOINTS = {
 def search_address(address, juso_key):
     r = requests.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
         params={"confmKey": juso_key, "currentPage": 1, "countPerPage": 10,
-                "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=10)
+                "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=25)
     data = r.json()
     common = data.get("results", {}).get("common", {})
     if common.get("errorCode") != "0":
@@ -68,7 +68,7 @@ def get_building_info(j, bldg_key):
         params={"serviceKey": bldg_key, "sigunguCd": j["sigunguCd"],
                 "bjdongCd": j["bjdongCd"], "platGbCd": j["platGbCd"],
                 "bun": j["bun"], "ji": j["ji"],
-                "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=15)
+                "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=30)
     items = r.json().get("response", {}).get("body", {}).get("items", {})
     if not items:
         return None, "건축물대장 조회 결과 없음"
@@ -95,7 +95,7 @@ def geocode_address(road_addr, kakao_key):
             "https://dapi.kakao.com/v2/local/search/address.json",
             params={"query": road_addr},
             headers={"Authorization": f"KakaoAK {kakao_key}"},
-            timeout=10
+            timeout=25
         )
         resp_data = r.json()
         docs = resp_data.get("documents", [])
@@ -120,7 +120,7 @@ def get_market_price(j, mtype, deal_type, bldg_key, months=6):
         while mo <= 0: mo += 12; yr -= 1
         try:
             r = requests.get(url, params={"serviceKey": bldg_key, "LAWD_CD": j["sigunguCd"],
-                "DEAL_YMD": f"{yr}{mo:02d}", "pageNo": "1", "numOfRows": "1000"}, timeout=15)
+                "DEAL_YMD": f"{yr}{mo:02d}", "pageNo": "1", "numOfRows": "1000"}, timeout=30)
             root = ET.fromstring(r.content)
             rc = root.find(".//resultCode")
             if rc is None or rc.text not in ("00", "000"): continue
@@ -169,7 +169,7 @@ def get_db_schema(notion_token, db_id):
     try:
         r = requests.get(f"https://api.notion.com/v1/databases/{db_id}",
             headers={"Authorization": f"Bearer {notion_token}", "Notion-Version": "2022-06-28"},
-            timeout=15)
+            timeout=30)
         props = r.json().get("properties", {})
         return {name: p.get("type") for name, p in props.items()}
     except Exception:
@@ -188,7 +188,7 @@ def update_notion_page(notion_token, page_id, props):
         f"https://api.notion.com/v1/pages/{page_id}",
         headers={"Authorization": f"Bearer {notion_token}",
                  "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-        json={"properties": props}, timeout=10)
+        json={"properties": props}, timeout=25)
 
 
 def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
@@ -305,7 +305,7 @@ def load_notion_list(notion_token, db_id):
         headers={"Authorization": f"Bearer {notion_token}",
                  "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
         json={"sorts": [{"timestamp": "created_time", "direction": "descending"}]},
-        timeout=15)
+        timeout=30)
     rows = []
     for p in resp.json().get("results", []):
         pr = p["properties"]
@@ -843,7 +843,7 @@ with tab_list:
                             requests.patch(f"https://api.notion.com/v1/pages/{pid}",
                                 headers={"Authorization": f"Bearer {notion_token}",
                                          "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-                                json={"archived": True}, timeout=10)
+                                json={"archived": True}, timeout=25)
                             deleted += 1
                         except Exception:
                             failed += 1
