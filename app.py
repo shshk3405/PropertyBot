@@ -406,6 +406,7 @@ h3, .stSubheader { font-weight:800; letter-spacing:-.3px; }
 }
 /* 사이드바 */
 [data-testid="stSidebar"] { background:#fff; border-right:1px solid #ececef; }
+[data-testid="stSidebar"] { display:none; }
 [data-testid="stSidebar"][aria-expanded="true"] { min-width:0 !important; }
 section[data-testid="stSidebar"] > div {{ padding-top:1rem; }}
 /* 입력 위젯 */
