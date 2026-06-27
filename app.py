@@ -371,7 +371,7 @@ def badge(text, color):
 
 # ── Streamlit UI ─────────────────────────────────────────
 
-st.set_page_config(page_title="PropertyBot", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="PropertyBot", page_icon="🏠", layout="wide", initial_sidebar_state="collapsed")
 
 # Pretendard 웹폰트: Streamlit이 <style> 안의 @import를 차단하므로 <link>로 직접 주입
 st.markdown(
@@ -406,6 +406,8 @@ h3, .stSubheader { font-weight:800; letter-spacing:-.3px; }
 }
 /* 사이드바 */
 [data-testid="stSidebar"] { background:#fff; border-right:1px solid #ececef; }
+[data-testid="stSidebar"][aria-expanded="true"] { min-width:0 !important; }
+section[data-testid="stSidebar"] > div {{ padding-top:1rem; }}
 /* 입력 위젯 */
 [data-baseweb="input"], [data-baseweb="select"] > div, .stTextArea textarea { border-radius:9px !important; }
 /* 카드(테두리 컨테이너) */
@@ -481,9 +483,6 @@ if schema:
                        "(DB에 없는 컬럼은 저장 시 자동으로 건너뜁니다.)")
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
-    else:
-        st.caption("✅ 권장 컬럼이 모두 노션 DB에 준비돼 있어요.")
-
 tab_dash, tab_input, tab_list, tab_map, tab_check = st.tabs(
     ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트"])
 
