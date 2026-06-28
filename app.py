@@ -934,8 +934,7 @@ with tab_map:
 
         center_lat = map_rows[0]["lat"]
         center_lng = map_rows[0]["lng"]
-
-        leaflet_map_html = f"""
+leaflet_map_html = f"""
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -945,36 +944,36 @@ with tab_map:
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <style>
-html, body {{{{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretendard','Malgun Gothic',sans-serif; }}}}
-#container {{{{ display:flex; width:100%; height:100%; }}}}
-@media (max-width: 768px) {{{{
-    #container {{{{ flex-direction:column; height:auto; }}}}
-    #list-panel {{{{ width:100%; min-width:100%; height:180px; min-height:180px; border-right:none; border-bottom:1px solid #ececef; }}}}
-    #map-wrap {{{{ height:450px; min-height:450px; }}}}
-    #map {{{{ height:450px; min-height:450px; }}}}
-}}}}
-#list-panel {{{{ width:262px; min-width:262px; height:100%; overflow-y:auto; background:#fafafa; border-right:1px solid #ececef; display:flex; flex-direction:column; }}}}
-#list-header {{{{ padding:11px 14px; font-size:14px; font-weight:800; border-bottom:1px solid #ececef; background:#fff; display:flex; align-items:center; justify-content:space-between; }}}}
-#list-filter {{{{ padding:8px 14px; border-bottom:1px solid #efeff1; background:#fff; }}}}
-#list-filter select {{{{ width:100%; padding:6px 8px; font-size:12px; border:1px solid #e2e2e7; border-radius:8px; }}}}
-#list-items {{{{ flex:1; overflow-y:auto; }}}}
-.list-item {{{{ padding:11px 14px; border-bottom:1px solid #efeff1; cursor:pointer; transition:background .15s; }}}}
-.list-item:hover {{{{ background:#eef1fd; }}}}
-.list-item.active {{{{ background:#e3e9fb; border-left:3px solid {ACCENT}; }}}}
-.list-item .li-name {{{{ font-size:13px; font-weight:700; margin-bottom:3px; }}}}
-.list-item .li-addr {{{{ font-size:11px; color:#a4a4ac; margin:0 0 3px 14px; }}}}
-.list-item .li-info {{{{ font-size:11px; color:#8a8a93; margin-left:14px; display:flex; gap:8px; align-items:center; }}}}
-.li-dot {{{{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }}}}
-#map-wrap {{{{ flex:1; position:relative; }}}}
-#map {{{{ width:100%; height:100%; }}}}
-.ctrl-panel {{{{ position:absolute; top:12px; right:12px; z-index:1000; background:#fff; border-radius:9px; box-shadow:0 2px 8px rgba(0,0,0,.18); padding:9px; display:flex; flex-direction:column; gap:5px; font-size:12px; }}}}
-.ctrl-btn {{{{ cursor:pointer; border:1px solid #e2e2e7; background:#fff; border-radius:7px; padding:5px 9px; font-size:12px; text-align:center; }}}}
-.ctrl-btn:hover {{{{ background:#f3f3f5; }}}}
-.ctrl-btn.active {{{{ background:{ACCENT}; color:#fff; border-color:{ACCENT}; }}}}
-.legend {{{{ position:absolute; bottom:12px; left:12px; z-index:1000; background:rgba(255,255,255,0.94); border-radius:8px; padding:8px 13px; box-shadow:0 1px 4px rgba(0,0,0,.14); font-size:12px; display:flex; gap:14px; }}}}
-.legend-item {{{{ display:flex; align-items:center; gap:5px; }}}}
-.legend-dot {{{{ width:10px; height:10px; border-radius:50%; }}}}
-.dist-label {{{{ background:#fff; border:1px solid #db4040; color:#db4040; font-size:12px; font-weight:700; padding:3px 8px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.2); white-space:nowrap; }}}}
+html, body {{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretendard','Malgun Gothic',sans-serif; }}
+#container {{ display:flex; width:100%; height:100%; }}
+@media (max-width: 768px) {{
+    #container {{ flex-direction:column; height:auto; }}
+    #list-panel {{ width:100%!important; min-width:100%!important; height:180px; min-height:180px; border-right:none!important; border-bottom:1px solid #ececef; }}
+    #map-wrap {{ height:450px; min-height:450px; }}
+    #map {{ height:450px!important; min-height:450px; }}
+}}
+#list-panel {{ width:262px; min-width:262px; height:100%; overflow-y:auto; background:#fafafa; border-right:1px solid #ececef; display:flex; flex-direction:column; }}
+#list-header {{ padding:11px 14px; font-size:14px; font-weight:800; border-bottom:1px solid #ececef; background:#fff; display:flex; align-items:center; justify-content:space-between; }}
+#list-filter {{ padding:8px 14px; border-bottom:1px solid #efeff1; background:#fff; }}
+#list-filter select {{ width:100%; padding:6px 8px; font-size:12px; border:1px solid #e2e2e7; border-radius:8px; }}
+#list-items {{ flex:1; overflow-y:auto; }}
+.list-item {{ padding:11px 14px; border-bottom:1px solid #efeff1; cursor:pointer; transition:background .15s; }}
+.list-item:hover {{ background:#eef1fd; }}
+.list-item.active {{ background:#e3e9fb; border-left:3px solid #3b5bdb; }}
+.list-item .li-name {{ font-size:13px; font-weight:700; margin-bottom:3px; }}
+.list-item .li-addr {{ font-size:11px; color:#a4a4ac; margin:0 0 3px 14px; }}
+.list-item .li-info {{ font-size:11px; color:#8a8a93; margin-left:14px; display:flex; gap:8px; align-items:center; }}
+.li-dot {{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }}
+#map-wrap {{ flex:1; position:relative; }}
+#map {{ width:100%; height:100%; }}
+.ctrl-panel {{ position:absolute; top:12px; right:12px; z-index:1000; background:#fff; border-radius:9px; box-shadow:0 2px 8px rgba(0,0,0,.18); padding:9px; display:flex; flex-direction:column; gap:5px; font-size:12px; }}
+.ctrl-btn {{ cursor:pointer; border:1px solid #e2e2e7; background:#fff; border-radius:7px; padding:5px 9px; font-size:12px; text-align:center; }}
+.ctrl-btn:hover {{ background:#f3f3f5; }}
+.ctrl-btn.active {{ background:#3b5bdb; color:#fff; border-color:#3b5bdb; }}
+.legend {{ position:absolute; bottom:12px; left:12px; z-index:1000; background:rgba(255,255,255,0.94); border-radius:8px; padding:8px 13px; box-shadow:0 1px 4px rgba(0,0,0,.14); font-size:12px; display:flex; gap:14px; }}
+.legend-item {{ display:flex; align-items:center; gap:5px; }}
+.legend-dot {{ width:10px; height:10px; border-radius:50%; }}
+.dist-label {{ background:#fff; border:1px solid #db4040; color:#db4040; font-size:12px; font-weight:700; padding:3px 8px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.2); white-space:nowrap; }}
 </style>
 </head><body>
 <div id="container">
@@ -997,30 +996,29 @@ html, body {{{{ margin:0; padding:0; width:100%; height:100%; font-family:'Prete
 <div id="map"></div>
 </div></div>
 <script>
-var MARKERS_DATA = {markers_json};
-var COLOR_MAP = {{{{ '매매':'#e5484d', '전세':'#2f6feb', '월세':'#2f9e63' }}}};
-var map = L.map('map', {{{{ zoomControl: false }}}}).setView([{center_lat}, {center_lng}], 15);
-L.control.zoom({{{{ position: 'bottomright' }}}}).addTo(map);
-L.tileLayer('https://{{{{s}}}}.tile.openstreetmap.org/{{{{z}}}}/{{{{x}}}}/{{{{y}}}}.png', {{{{ attribution: '© OpenStreetMap', maxZoom: 19 }}}}).addTo(map);
-function makeIcon(color) {{{{ var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40"><path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z" fill="' + color + '"/><circle cx="14" cy="14" r="6" fill="white"/></svg>'; return L.divIcon({{{{ html: svg, className: '', iconSize: [28, 40], iconAnchor: [14, 40], popupAnchor: [0, -40] }}}}); }}}}
-function popupHTML(d) {{{{ var hoqa = d.price ? d.price.toLocaleString() + '만원' : '-'; var avg = d.avgPrice ? d.avgPrice.toLocaleString() + '원/평' : '-'; var bldg = (d.year && d.floors) ? '🏗️ 준공: ' + Math.floor(d.year) + '년 / ' + Math.floor(d.floors) + '층<br>' : ''; var gapTxt = (d.gap !== null && d.gap !== undefined) ? '<span style="color:' + (d.gap>0?'#1f9d57':'#e5484d') + ';font-weight:bold;">📊 시세갭: ' + (d.gap>0?'+':'') + d.gap.toFixed(1) + '%</span>' : ''; return '<div style="font-family:Pretendard,sans-serif;font-size:13px;min-width:180px;line-height:1.6;"><div style="font-size:15px;font-weight:800;margin-bottom:4px;">' + d.name + '</div><hr style="margin:4px 0;border:none;border-top:1px solid #eee;">📍 ' + d.addr + '<br>🏷️ ' + (d.deal||'-') + ' · ' + (d.mtype||'-') + '<br>💰 호가: ' + hoqa + '<br>📊 평당가: ' + avg + '<br>' + bldg + gapTxt + '</div>'; }}}}
-var markers = []; var clusterGroup = L.markerClusterGroup({{{{ maxClusterRadius: 50 }}}});
-MARKERS_DATA.forEach(function(d, idx) {{{{ var color = COLOR_MAP[d.deal] || '#999'; var marker = L.marker([d.lat, d.lng], {{{{ icon: makeIcon(color) }}}}); marker.bindPopup(popupHTML(d), {{{{ maxWidth: 280 }}}}); marker.on('click', function() {{{{ _highlightListItem(idx); }}}}); marker.addTo(map); clusterGroup.addLayer(marker); markers.push(marker); }}}});
-function renderList(filter) {{{{ var container = document.getElementById('list-items'); container.innerHTML = ''; var count = 0; MARKERS_DATA.forEach(function(d, i) {{{{ if (filter && filter !== '전체' && d.deal !== filter) return; count++; var color = COLOR_MAP[d.deal] || '#999'; var hoqa = d.price ? d.price.toLocaleString() + '만원' : '-'; var gp = (d.gap !== null && d.gap !== undefined) ? '<span style="color:' + (d.gap>0?'#1f9d57':'#e5484d') + ';font-weight:bold;">' + (d.gap>0?'+':'') + d.gap.toFixed(1) + '%</span>' : ''; var div = document.createElement('div'); div.className = 'list-item'; div.setAttribute('data-idx', i); div.innerHTML = '<div class="li-name"><span class="li-dot" style="background:' + color + '"></span>' + d.name + '</div><div class="li-addr">' + d.addr + '</div><div class="li-info"><span>' + (d.deal||'-') + '</span><span>💰 ' + hoqa + '</span>' + gp + '</div>'; div.onclick = function() {{{{ focusMarker(i); }}}}; container.appendChild(div); }}}}); document.getElementById('list-count').textContent = count + '개'; }}}}
-function focusMarker(idx) {{{{ var d = MARKERS_DATA[idx], marker = markers[idx]; map.setView([d.lat, d.lng], 17); marker.openPopup(); _highlightListItem(idx); }}}}
-function _highlightListItem(idx) {{{{ document.querySelectorAll('.list-item').forEach(function(el) {{{{ el.classList.remove('active'); }}}}); var target = document.querySelector('.list-item[data-idx="' + idx + '"]'); if (target) {{{{ target.classList.add('active'); target.scrollIntoView({{{{ behavior:'smooth', block:'nearest' }}}}); }}}} }}}}
-window.filterList = function() {{{{ renderList(document.getElementById('listDealFilter').value); }}}}; renderList('전체');
-var clusterOn = false; function toggleCluster() {{{{ clusterOn = !clusterOn; var btn = document.getElementById('btnCluster'); if (clusterOn) {{{{ markers.forEach(function(m) {{{{ map.removeLayer(m); }}}}); map.addLayer(clusterGroup); btn.classList.add('active'); }}}} else {{{{ map.removeLayer(clusterGroup); markers.forEach(function(m) {{{{ m.addTo(map); }}}}); btn.classList.remove('active'); }}}} }}}}
-var gapLabelsOn = false; var gapLabelLayers = []; function toggleGapLabels() {{{{ gapLabelsOn = !gapLabelsOn; var btn = document.getElementById('btnGapLabel'); if (gapLabelsOn) {{{{ MARKERS_DATA.forEach(function(d, i) {{{{ if (d.gap === null || d.gap === undefined) return; var col = d.gap > 0 ? '#1f9d57' : '#e5484d'; var txt = (d.gap > 0 ? '+' : '') + d.gap.toFixed(1) + '%'; var icon = L.divIcon({{{{ html: '<div style="background:#fff;border:1px solid ' + col + ';color:' + col + ';font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;box-shadow:0 1px 3px rgba(0,0,0,.25);white-space:nowrap;">' + txt + '</div>', className: '', iconAnchor: [20, 48] }}}}); var lbl = L.marker([d.lat, d.lng], {{{{ icon: icon, interactive: false }}}}).addTo(map); gapLabelLayers.push(lbl); }}}}); btn.classList.add('active'); }}}} else {{{{ gapLabelLayers.forEach(function(l) {{{{ map.removeLayer(l); }}}}); gapLabelLayers = []; btn.classList.remove('active'); }}}} }}}}
-var distMode = false, distPoints = [], distLine = null, distMarkers = [], distLabels = [];
-function toggleDistanceMode() {{{{ distMode = !distMode; var btn = document.getElementById('btnDistance'); if (distMode) {{{{ btn.classList.add('active'); document.getElementById('map').style.cursor = 'crosshair'; }}}} else {{{{ btn.classList.remove('active'); document.getElementById('map').style.cursor = ''; clearDistance(); }}}} }}}}
-function clearDistance() {{{{ if (distLine) {{{{ map.removeLayer(distLine); distLine = null; }}}} distMarkers.forEach(function(m) {{{{ map.removeLayer(m); }}}}); distLabels.forEach(function(l) {{{{ map.removeLayer(l); }}}}); distPoints = []; distMarkers = []; distLabels = []; }}}}
-map.on('click', function(e) {{{{ if (!distMode) return; distPoints.push(e.latlng); var dot = L.circleMarker(e.latlng, {{{{ radius:5, color:'#db4040', fillColor:'#db4040', fillOpacity:1 }}}}).addTo(map); distMarkers.push(dot); if (distPoints.length > 1) {{{{ if (distLine) map.removeLayer(distLine); distLine = L.polyline(distPoints, {{{{ color:'#db4040', weight:3 }}}}).addTo(map); var total = 0; for (var i = 1; i < distPoints.length; i++) {{{{ total += distPoints[i-1].distanceTo(distPoints[i]); }}}} var dist = Math.round(total); var wt = Math.floor(dist / 67), bt = Math.floor(dist / 227); var wh = wt > 60 ? Math.floor(wt/60) + '시간 ' : '', wm = (wt%60) + '분'; var bh = bt > 60 ? Math.floor(bt/60) + '시간 ' : '', bm = (bt%60) + '분'; distLabels.forEach(function(l) {{{{ map.removeLayer(l); }}}}); distLabels = []; var icon = L.divIcon({{{{ html: '<div class="dist-label">📏 ' + dist + 'm · 🚶 ' + wh + wm + ' · 🚲 ' + bh + bm + '</div>', className: '', iconAnchor: [0, -10] }}}}); var lbl = L.marker(e.latlng, {{{{ icon: icon, interactive: false }}}}).addTo(map); distLabels.push(lbl); }}}} }}}});
-map.on('contextmenu', function(e) {{{{ if (distMode) {{{{ toggleDistanceMode(); }}}} }}}});
+var D={markers_json};
+var C={{'매매':'#e5484d','전세':'#2f6feb','월세':'#2f9e63'}};
+var map=L.map('map',{{zoomControl:false}}).setView([{center_lat},{center_lng}],15);
+L.control.zoom({{position:'bottomright'}}).addTo(map);
+L.tileLayer('https://'+'{{'+'s}}.tile.openstreetmap.org/'+'{{'+'z}}/'+'{{'+'x}}/'+'{{'+'y}}.png',{{attribution:'© OpenStreetMap',maxZoom:19}}).addTo(map);
+function mI(c){{var s='<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40"><path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z" fill="'+c+'"/><circle cx="14" cy="14" r="6" fill="white"/></svg>';return L.divIcon({{html:s,className:'',iconSize:[28,40],iconAnchor:[14,40],popupAnchor:[0,-40]}});}}
+function pH(d){{var h=d.price?d.price.toLocaleString()+'만원':'-';var a=d.avgPrice?d.avgPrice.toLocaleString()+'원/평':'-';var b=(d.year&&d.floors)?'🏗️ 준공: '+Math.floor(d.year)+'년 / '+Math.floor(d.floors)+'층<br>':'';var g=(d.gap!==null&&d.gap!==undefined)?'<span style="color:'+(d.gap>0?'#1f9d57':'#e5484d')+';font-weight:bold;">📊 시세갭: '+(d.gap>0?'+':'')+d.gap.toFixed(1)+'%</span>':'';return '<div style="font-family:Pretendard,sans-serif;font-size:13px;min-width:180px;line-height:1.6;"><div style="font-size:15px;font-weight:800;margin-bottom:4px;">'+d.name+'</div><hr style="margin:4px 0;border:none;border-top:1px solid #eee;">📍 '+d.addr+'<br>🏷️ '+(d.deal||'-')+' · '+(d.mtype||'-')+'<br>💰 호가: '+h+'<br>📊 평당가: '+a+'<br>'+b+g+'</div>';}}
+var ms=[],cg=L.markerClusterGroup({{maxClusterRadius:50}});
+D.forEach(function(d,i){{var c=C[d.deal]||'#999';var m=L.marker([d.lat,d.lng],{{icon:mI(c)}});m.bindPopup(pH(d),{{maxWidth:280}});m.on('click',function(){{hL(i);}});m.addTo(map);cg.addLayer(m);ms.push(m);}});
+function rL(f){{var ct=document.getElementById('list-items');ct.innerHTML='';var n=0;D.forEach(function(d,i){{if(f&&f!=='전체'&&d.deal!==f)return;n++;var c=C[d.deal]||'#999';var h=d.price?d.price.toLocaleString()+'만원':'-';var g=(d.gap!==null&&d.gap!==undefined)?'<span style="color:'+(d.gap>0?'#1f9d57':'#e5484d')+';font-weight:bold;">'+(d.gap>0?'+':'')+d.gap.toFixed(1)+'%</span>':'';var v=document.createElement('div');v.className='list-item';v.setAttribute('data-idx',i);v.innerHTML='<div class="li-name"><span class="li-dot" style="background:'+c+'"></span>'+d.name+'</div><div class="li-addr">'+d.addr+'</div><div class="li-info"><span>'+(d.deal||'-')+'</span><span>💰 '+h+'</span>'+g+'</div>';v.onclick=function(){{fM(i);}};ct.appendChild(v);}});document.getElementById('list-count').textContent=n+'개';}}
+function fM(i){{var d=D[i],m=ms[i];map.setView([d.lat,d.lng],17);m.openPopup();hL(i);}}
+function hL(i){{document.querySelectorAll('.list-item').forEach(function(e){{e.classList.remove('active');}});var t=document.querySelector('.list-item[data-idx="'+i+'"]');if(t){{t.classList.add('active');t.scrollIntoView({{behavior:'smooth',block:'nearest'}});}}}}
+window.filterList=function(){{rL(document.getElementById('listDealFilter').value);}};rL('전체');
+var clOn=false;function toggleCluster(){{clOn=!clOn;var b=document.getElementById('btnCluster');if(clOn){{ms.forEach(function(m){{map.removeLayer(m);}});map.addLayer(cg);b.classList.add('active');}}else{{map.removeLayer(cg);ms.forEach(function(m){{m.addTo(map);}});b.classList.remove('active');}}}}
+var glOn=false,gls=[];function toggleGapLabels(){{glOn=!glOn;var b=document.getElementById('btnGapLabel');if(glOn){{D.forEach(function(d,i){{if(d.gap===null||d.gap===undefined)return;var c=d.gap>0?'#1f9d57':'#e5484d';var t=(d.gap>0?'+':'')+d.gap.toFixed(1)+'%';var ic=L.divIcon({{html:'<div style="background:#fff;border:1px solid '+c+';color:'+c+';font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;box-shadow:0 1px 3px rgba(0,0,0,.25);white-space:nowrap;">'+t+'</div>',className:'',iconAnchor:[20,48]}});gls.push(L.marker([d.lat,d.lng],{{icon:ic,interactive:false}}).addTo(map));}});b.classList.add('active');}}else{{gls.forEach(function(l){{map.removeLayer(l);}});gls=[];b.classList.remove('active');}}}}
+var dm=false,dp=[],dl=null,dms=[],dls=[];
+function toggleDistanceMode(){{dm=!dm;var b=document.getElementById('btnDistance');if(dm){{b.classList.add('active');document.getElementById('map').style.cursor='crosshair';}}else{{b.classList.remove('active');document.getElementById('map').style.cursor='';cD();}}}}
+function cD(){{if(dl){{map.removeLayer(dl);dl=null;}}dms.forEach(function(m){{map.removeLayer(m);}});dls.forEach(function(l){{map.removeLayer(l);}});dp=[];dms=[];dls=[];}}
+map.on('click',function(e){{if(!dm)return;dp.push(e.latlng);dms.push(L.circleMarker(e.latlng,{{radius:5,color:'#db4040',fillColor:'#db4040',fillOpacity:1}}).addTo(map));if(dp.length>1){{if(dl)map.removeLayer(dl);dl=L.polyline(dp,{{color:'#db4040',weight:3}}).addTo(map);var t=0;for(var i=1;i<dp.length;i++)t+=dp[i-1].distanceTo(dp[i]);var d=Math.round(t);var wt=Math.floor(d/67),bt=Math.floor(d/227);var wh=wt>60?Math.floor(wt/60)+'시간 ':'',wm=(wt%60)+'분';var bh=bt>60?Math.floor(bt/60)+'시간 ':'',bm=(bt%60)+'분';dls.forEach(function(l){{map.removeLayer(l);}});dls=[];dls.push(L.marker(e.latlng,{{icon:L.divIcon({{html:'<div class="dist-label">📏 '+d+'m · 🚶 '+wh+wm+' · 🚲 '+bh+bm+'</div>',className:'',iconAnchor:[0,-10]}}),interactive:false}}).addTo(map));}}}});
+map.on('contextmenu',function(){{if(dm)toggleDistanceMode();}});
 </script>
 </body></html>
 """
-        import streamlit.components.v1 as components
         components.html(leaflet_map_html, height=620)
         st.caption(f"총 {len(map_rows)}개 매물 표시됨")
 
