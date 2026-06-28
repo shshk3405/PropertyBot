@@ -41,7 +41,7 @@ RTMS_ENDPOINTS = {
 def search_address(address, juso_key):
     r = requests.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
         params={"confmKey": juso_key, "currentPage": 1, "countPerPage": 10,
-                "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=10)
+                "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=25)
     data = r.json()
     common = data.get("results", {}).get("common", {})
     if common.get("errorCode") != "0":
@@ -68,7 +68,7 @@ def get_building_info(j, bldg_key):
         params={"serviceKey": bldg_key, "sigunguCd": j["sigunguCd"],
                 "bjdongCd": j["bjdongCd"], "platGbCd": j["platGbCd"],
                 "bun": j["bun"], "ji": j["ji"],
-                "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=15)
+                "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=30)
     items = r.json().get("response", {}).get("body", {}).get("items", {})
     if not items:
         return None, "건축물대장 조회 결과 없음"
@@ -95,7 +95,7 @@ def geocode_address(road_addr, kakao_key):
             "https://dapi.kakao.com/v2/local/search/address.json",
             params={"query": road_addr},
             headers={"Authorization": f"KakaoAK {kakao_key}"},
-            timeout=10
+            timeout=25
         )
         resp_data = r.json()
         docs = resp_data.get("documents", [])
@@ -120,7 +120,7 @@ def get_market_price(j, mtype, deal_type, bldg_key, months=6):
         while mo <= 0: mo += 12; yr -= 1
         try:
             r = requests.get(url, params={"serviceKey": bldg_key, "LAWD_CD": j["sigunguCd"],
-                "DEAL_YMD": f"{yr}{mo:02d}", "pageNo": "1", "numOfRows": "1000"}, timeout=15)
+                "DEAL_YMD": f"{yr}{mo:02d}", "pageNo": "1", "numOfRows": "1000"}, timeout=30)
             root = ET.fromstring(r.content)
             rc = root.find(".//resultCode")
             if rc is None or rc.text not in ("00", "000"): continue
@@ -169,7 +169,7 @@ def get_db_schema(notion_token, db_id):
     try:
         r = requests.get(f"https://api.notion.com/v1/databases/{db_id}",
             headers={"Authorization": f"Bearer {notion_token}", "Notion-Version": "2022-06-28"},
-            timeout=15)
+            timeout=30)
         props = r.json().get("properties", {})
         return {name: p.get("type") for name, p in props.items()}
     except Exception:
@@ -188,7 +188,7 @@ def update_notion_page(notion_token, page_id, props):
         f"https://api.notion.com/v1/pages/{page_id}",
         headers={"Authorization": f"Bearer {notion_token}",
                  "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-        json={"properties": props}, timeout=10)
+        json={"properties": props}, timeout=25)
 
 
 def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
@@ -305,7 +305,7 @@ def load_notion_list(notion_token, db_id):
         headers={"Authorization": f"Bearer {notion_token}",
                  "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
         json={"sorts": [{"timestamp": "created_time", "direction": "descending"}]},
-        timeout=15)
+        timeout=30)
     rows = []
     for p in resp.json().get("results", []):
         pr = p["properties"]
@@ -371,7 +371,7 @@ def badge(text, color):
 
 # ── Streamlit UI ─────────────────────────────────────────
 
-st.set_page_config(page_title="PropertyBot", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="PropertyBot", page_icon="🏠", layout="wide", initial_sidebar_state="collapsed")
 
 # Pretendard 웹폰트: Streamlit이 <style> 안의 @import를 차단하므로 <link>로 직접 주입
 st.markdown(
@@ -405,7 +405,7 @@ h3, .stSubheader { font-weight:800; letter-spacing:-.3px; }
     background:__ACCENT__; border-color:__ACCENT__;
 }
 /* 사이드바 */
-[data-testid="stSidebar"] { background:#fff; border-right:1px solid #ececef; }
+[data-testid="stSidebar"] { background:#fff; border-right:1px solid #ececef; display:none; }
 /* 입력 위젯 */
 [data-baseweb="input"], [data-baseweb="select"] > div, .stTextArea textarea { border-radius:9px !important; }
 /* 카드(테두리 컨테이너) */
@@ -481,8 +481,6 @@ if schema:
                        "(DB에 없는 컬럼은 저장 시 자동으로 건너뜁니다.)")
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
-    else:
-        st.caption("✅ 권장 컬럼이 모두 노션 DB에 준비돼 있어요.")
 
 tab_dash, tab_input, tab_list, tab_map, tab_check = st.tabs(
     ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트"])
@@ -735,9 +733,9 @@ with tab_list:
         else:
             page_ids = [r["page_id"] for r in filtered]
             orig = [{"관심": bool(r.get("관심")), "상태": r.get("상태") or "검토중",
-                     "평점": r.get("평점"),
-                     "매물명": r.get("매물명", ""), "주소": r.get("주소", ""),
-                     "호가": r.get("호가"), "거래": r.get("거래방식", "")} for r in filtered]
+                     "평점": r.get("평점"), "매물명": r.get("매물명", ""),
+                     "주소": r.get("주소", ""), "호가": r.get("호가"),
+                     "거래": r.get("거래방식", "")} for r in filtered]
             recs = []
             for r in filtered:
                 recs.append({
@@ -860,7 +858,7 @@ with tab_list:
                             requests.patch(f"https://api.notion.com/v1/pages/{pid}",
                                 headers={"Authorization": f"Bearer {notion_token}",
                                          "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-                                json={"archived": True}, timeout=10)
+                                json={"archived": True}, timeout=25)
                             deleted += 1
                         except Exception:
                             failed += 1
@@ -879,167 +877,117 @@ with tab_map:
             st.cache_data.clear()
             st.rerun()
 
-    if not kakao_js_key:
-        st.warning("사이드바에서 카카오 JavaScript 키를 입력해주세요. (REST API 키와 다릅니다)")
-        st.info("카카오 개발자콘솔 → 내 애플리케이션 → 플랫폼 키 → JavaScript 키 복사\n\n"
-                "플랫폼 설정에서 `http://localhost:8501` 도메인도 등록해야 합니다.")
+    @st.cache_data(ttl=300)
+    def get_map_data(_juso_key, _notion_token, _db_id, _kakao_key, _schema):
+        rows = load_notion_list(_notion_token, _db_id)
+        result, failed = [], []
+        for row in rows:
+            if not row.get("주소"):
+                continue
+            lat, lng = row.get("위도"), row.get("경도")
+            if lat and lng:
+                result.append({**row, "lat": float(lat), "lng": float(lng)})
+                continue
+            juso, err = search_address(row["주소"], _juso_key)
+            road_addr = juso.get("roadAddr") if juso else row["주소"]
+            glat, glng, gerr = geocode_address(road_addr or row["주소"], _kakao_key)
+            if glat and glng:
+                result.append({**row, "lat": glat, "lng": glng})
+                if _schema and "위도" in _schema and "경도" in _schema and row.get("page_id"):
+                    try:
+                        update_notion_page(_notion_token, row["page_id"],
+                            {"위도": {"number": glat}, "경도": {"number": glng}})
+                    except Exception:
+                        pass
+            else:
+                failed.append(f"⚠️ {row['매물명']}: 좌표 없음 ({gerr})")
+        return result, failed
+
+    with st.spinner("매물 위치 조회 중..."):
+        try:
+            map_rows, map_failed = get_map_data(juso_key, notion_token, db_id, kakao_key, schema)
+        except Exception as e:
+            st.error(f"지도 데이터 로드 실패: {e}")
+            map_rows, map_failed = [], []
+
+    if map_failed:
+        with st.expander(f"⚠️ 좌표 조회 실패 {len(map_failed)}건 (클릭해서 확인)"):
+            for msg in map_failed:
+                st.write(msg)
+
+    if not map_rows:
+        st.info("지도에 표시할 매물이 없어요. 주소가 입력된 매물을 먼저 저장해주세요.")
     else:
-        @st.cache_data(ttl=300)
-        def get_map_data(_juso_key, _notion_token, _db_id, _kakao_key, _schema):
-            rows = load_notion_list(_notion_token, _db_id)
-            result, failed = [], []
-            for row in rows:
-                if not row.get("주소"):
-                    continue
-                lat, lng = row.get("위도"), row.get("경도")
-                if lat and lng:
-                    result.append({**row, "lat": float(lat), "lng": float(lng)})
-                    continue
-                juso, err = search_address(row["주소"], _juso_key)
-                road_addr = juso.get("roadAddr") if juso else row["주소"]
-                glat, glng, gerr = geocode_address(road_addr or row["주소"], _kakao_key)
-                if glat and glng:
-                    result.append({**row, "lat": glat, "lng": glng})
-                    if _schema and "위도" in _schema and "경도" in _schema and row.get("page_id"):
-                        try:
-                            update_notion_page(_notion_token, row["page_id"],
-                                {"위도": {"number": glat}, "경도": {"number": glng}})
-                        except Exception:
-                            pass
-                else:
-                    failed.append(f"⚠️ {row['매물명']}: 좌표 없음 ({gerr})")
-            return result, failed
+        import json as _json
 
-        with st.spinner("매물 위치 조회 중..."):
-            try:
-                map_rows, map_failed = get_map_data(juso_key, notion_token, db_id, kakao_key, schema)
-            except Exception as e:
-                st.error(f"지도 데이터 로드 실패: {e}")
-                map_rows, map_failed = [], []
+        markers_json = _json.dumps([
+            {
+                "name": r["매물명"], "addr": r.get("주소", ""),
+                "deal": r.get("거래방식", ""), "mtype": r.get("매물유형", ""),
+                "price": r.get("호가"), "avgPrice": r.get("평당가(원)"),
+                "year": r.get("준공년도"), "floors": r.get("최고층수"),
+                "gap": compute_gap(r),
+                "lat": r["lat"], "lng": r["lng"],
+            }
+            for r in map_rows
+        ], ensure_ascii=False)
 
-        if map_failed:
-            with st.expander(f"⚠️ 좌표 조회 실패 {len(map_failed)}건 (클릭해서 확인)"):
-                for msg in map_failed:
-                    st.write(msg)
+        center_lat = map_rows[0]["lat"]
+        center_lng = map_rows[0]["lng"]
 
-        if not map_rows:
-            st.info("지도에 표시할 매물이 없어요. 주소가 입력된 매물을 먼저 저장해주세요.")
-        else:
-            import json as _json
-
-            markers_json = _json.dumps([
-                {
-                    "name": r["매물명"], "addr": r.get("주소", ""),
-                    "deal": r.get("거래방식", ""), "mtype": r.get("매물유형", ""),
-                    "price": r.get("호가"), "avgPrice": r.get("평당가(원)"),
-                    "year": r.get("준공년도"), "floors": r.get("최고층수"),
-                    "gap": compute_gap(r),
-                    "lat": r["lat"], "lng": r["lng"],
-                }
-                for r in map_rows
-            ], ensure_ascii=False)
-
-            center_lat = map_rows[0]["lat"]
-            center_lng = map_rows[0]["lng"]
-
-            kakao_map_html = f"""
+        leaflet_map_html = f"""
 <!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <style>
-html, body {{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretendard','Malgun Gothic',sans-serif; }}
-#container {{ display:flex; width:100%; height:100%; }}
-#list-panel {{
-    width:262px; min-width:262px; height:100%; overflow-y:auto;
-    background:#fafafa; border-right:1px solid #ececef;
-    display:flex; flex-direction:column;
-}}
-#list-header {{
-    padding:11px 14px; font-size:14px; font-weight:800;
-    border-bottom:1px solid #ececef; background:#fff;
-    display:flex; align-items:center; justify-content:space-between;
-}}
-#list-filter {{ padding:8px 14px; border-bottom:1px solid #efeff1; background:#fff; }}
-#list-filter select {{ width:100%; padding:6px 8px; font-size:12px; border:1px solid #e2e2e7; border-radius:8px; }}
-#list-items {{ flex:1; overflow-y:auto; }}
-.list-item {{ padding:11px 14px; border-bottom:1px solid #efeff1; cursor:pointer; transition:background .15s; }}
-.list-item:hover {{ background:#eef1fd; }}
-.list-item.active {{ background:#e3e9fb; border-left:3px solid {ACCENT}; }}
-.list-item .li-name {{ font-size:13px; font-weight:700; margin-bottom:3px; }}
-.list-item .li-addr {{ font-size:11px; color:#a4a4ac; margin:0 0 3px 14px; }}
-.list-item .li-info {{ font-size:11px; color:#8a8a93; margin-left:14px; display:flex; gap:8px; align-items:center; }}
-.li-dot {{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }}
-#map-wrap {{ flex:1; position:relative; }}
-#map {{ width:100%; height:100%; }}
-.ctrl-panel {{
-    position:absolute; top:12px; right:12px; z-index:10;
-    background:#fff; border-radius:9px; box-shadow:0 2px 8px rgba(0,0,0,.18);
-    padding:9px; display:flex; flex-direction:column; gap:5px; font-size:12px;
-}}
-.ctrl-panel label {{ cursor:pointer; display:flex; align-items:center; gap:5px; padding:2px 4px; border-radius:5px; }}
-.ctrl-panel label:hover {{ background:#f3f3f5; }}
-.ctrl-btn {{ cursor:pointer; border:1px solid #e2e2e7; background:#fff; border-radius:7px; padding:5px 9px; font-size:12px; text-align:center; }}
-.ctrl-btn:hover {{ background:#f3f3f5; }}
-.ctrl-btn.active {{ background:{ACCENT}; color:#fff; border-color:{ACCENT}; }}
-.map-type-panel {{
-    position:absolute; top:12px; left:12px; z-index:10;
-    display:flex; border-radius:7px; overflow:hidden; box-shadow:0 2px 6px rgba(0,0,0,.18);
-}}
-.map-type-btn {{ cursor:pointer; border:none; background:#fff; padding:7px 13px; font-size:12px; border-right:1px solid #eee; }}
-.map-type-btn:last-child {{ border-right:none; }}
-.map-type-btn:hover {{ background:#f3f3f5; }}
-.map-type-btn.active {{ background:{ACCENT}; color:#fff; }}
-.legend {{
-    position:absolute; bottom:12px; left:12px; z-index:10;
-    background:rgba(255,255,255,0.94); border-radius:8px; padding:8px 13px;
-    box-shadow:0 1px 4px rgba(0,0,0,.14); font-size:12px; display:flex; gap:14px;
-}}
-.legend-item {{ display:flex; align-items:center; gap:5px; }}
-.legend-dot {{ width:10px; height:10px; border-radius:50%; }}
-.dot {{overflow:hidden;float:left;width:12px;height:12px;background:url('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/mini_circle.png');}}
-.dotOverlay {{position:relative;bottom:10px;border-radius:6px;border:1px solid #ccc;border-bottom:2px solid #ddd;float:left;font-size:12px;padding:5px;background:#fff;}}
-.dotOverlay:nth-of-type(n) {{border:0; box-shadow:0px 1px 2px #888;}}
-.number {{font-weight:bold;color:#ee6152;}}
-.dotOverlay:after {{content:'';position:absolute;margin-left:-6px;left:50%;bottom:-8px;width:11px;height:8px;background:url('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/vertex_white_small.png')}}
-.distanceInfo {{position:relative;top:5px;left:5px;list-style:none;margin:0;padding:0;}}
-.distanceInfo .label {{display:inline-block;width:50px;}}
-.distanceInfo:after {{content:none;}}
-.info-popup {{ padding:11px; font-size:13px; min-width:184px; line-height:1.6; }}
-.info-popup .title {{ font-size:15px; font-weight:800; margin-bottom:4px; }}
-.info-popup hr {{ margin:5px 0; border:none; border-top:1px solid #eee; }}
+html, body {{{{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretendard','Malgun Gothic',sans-serif; }}}}
+#container {{{{ display:flex; width:100%; height:100%; }}}}
+@media (max-width: 768px) {{{{
+    #container {{{{ flex-direction:column; height:auto; }}}}
+    #list-panel {{{{ width:100%; min-width:100%; height:180px; min-height:180px; border-right:none; border-bottom:1px solid #ececef; }}}}
+    #map-wrap {{{{ height:450px; min-height:450px; }}}}
+    #map {{{{ height:450px; min-height:450px; }}}}
+}}}}
+#list-panel {{{{ width:262px; min-width:262px; height:100%; overflow-y:auto; background:#fafafa; border-right:1px solid #ececef; display:flex; flex-direction:column; }}}}
+#list-header {{{{ padding:11px 14px; font-size:14px; font-weight:800; border-bottom:1px solid #ececef; background:#fff; display:flex; align-items:center; justify-content:space-between; }}}}
+#list-filter {{{{ padding:8px 14px; border-bottom:1px solid #efeff1; background:#fff; }}}}
+#list-filter select {{{{ width:100%; padding:6px 8px; font-size:12px; border:1px solid #e2e2e7; border-radius:8px; }}}}
+#list-items {{{{ flex:1; overflow-y:auto; }}}}
+.list-item {{{{ padding:11px 14px; border-bottom:1px solid #efeff1; cursor:pointer; transition:background .15s; }}}}
+.list-item:hover {{{{ background:#eef1fd; }}}}
+.list-item.active {{{{ background:#e3e9fb; border-left:3px solid {ACCENT}; }}}}
+.list-item .li-name {{{{ font-size:13px; font-weight:700; margin-bottom:3px; }}}}
+.list-item .li-addr {{{{ font-size:11px; color:#a4a4ac; margin:0 0 3px 14px; }}}}
+.list-item .li-info {{{{ font-size:11px; color:#8a8a93; margin-left:14px; display:flex; gap:8px; align-items:center; }}}}
+.li-dot {{{{ width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:middle; }}}}
+#map-wrap {{{{ flex:1; position:relative; }}}}
+#map {{{{ width:100%; height:100%; }}}}
+.ctrl-panel {{{{ position:absolute; top:12px; right:12px; z-index:1000; background:#fff; border-radius:9px; box-shadow:0 2px 8px rgba(0,0,0,.18); padding:9px; display:flex; flex-direction:column; gap:5px; font-size:12px; }}}}
+.ctrl-btn {{{{ cursor:pointer; border:1px solid #e2e2e7; background:#fff; border-radius:7px; padding:5px 9px; font-size:12px; text-align:center; }}}}
+.ctrl-btn:hover {{{{ background:#f3f3f5; }}}}
+.ctrl-btn.active {{{{ background:{ACCENT}; color:#fff; border-color:{ACCENT}; }}}}
+.legend {{{{ position:absolute; bottom:12px; left:12px; z-index:1000; background:rgba(255,255,255,0.94); border-radius:8px; padding:8px 13px; box-shadow:0 1px 4px rgba(0,0,0,.14); font-size:12px; display:flex; gap:14px; }}}}
+.legend-item {{{{ display:flex; align-items:center; gap:5px; }}}}
+.legend-dot {{{{ width:10px; height:10px; border-radius:50%; }}}}
+.dist-label {{{{ background:#fff; border:1px solid #db4040; color:#db4040; font-size:12px; font-weight:700; padding:3px 8px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,.2); white-space:nowrap; }}}}
 </style>
 </head><body>
-
 <div id="container">
 <div id="list-panel">
-    <div id="list-header">
-        <span>📋 매물 목록</span>
-        <span id="list-count" style="font-size:11px;color:#a4a4ac;font-weight:600;"></span>
-    </div>
-    <div id="list-filter">
-        <select id="listDealFilter" onchange="filterList()">
-            <option value="전체">전체</option>
-            <option value="매매">매매</option>
-            <option value="전세">전세</option>
-            <option value="월세">월세</option>
-        </select>
-    </div>
+    <div id="list-header"><span>📋 매물 목록</span><span id="list-count" style="font-size:11px;color:#a4a4ac;font-weight:600;"></span></div>
+    <div id="list-filter"><select id="listDealFilter" onchange="filterList()"><option value="전체">전체</option><option value="매매">매매</option><option value="전세">전세</option><option value="월세">월세</option></select></div>
     <div id="list-items"></div>
 </div>
-
 <div id="map-wrap">
-<div class="map-type-panel">
-    <button class="map-type-btn active" onclick="setMapType('normal')">일반지도</button>
-    <button class="map-type-btn" onclick="setMapType('skyview')">스카이뷰</button>
-    <button class="map-type-btn" onclick="setMapType('hybrid')">하이브리드</button>
-</div>
 <div class="ctrl-panel">
-    <label><input type="checkbox" id="chkTraffic" onchange="toggleOverlay('traffic')"> 🚗 교통정보</label>
-    <label><input type="checkbox" id="chkRoadview" onchange="toggleOverlay('roadview')"> 🛣️ 로드뷰 도로</label>
-    <label><input type="checkbox" id="chkGapLabel" onchange="toggleGapLabels()"> 🏷️ 시세갭 라벨</label>
-    <hr style="margin:4px 0;border:none;border-top:1px solid #eee;">
     <button class="ctrl-btn" id="btnDistance" onclick="toggleDistanceMode()">📏 거리 측정</button>
     <button class="ctrl-btn" id="btnCluster" onclick="toggleCluster()">📍 클러스터</button>
+    <button class="ctrl-btn" id="btnGapLabel" onclick="toggleGapLabels()">🏷️ 시세갭 라벨</button>
 </div>
 <div class="legend">
     <div class="legend-item"><div class="legend-dot" style="background:#e5484d;"></div>매매</div>
@@ -1047,250 +995,34 @@ html, body {{ margin:0; padding:0; width:100%; height:100%; font-family:'Pretend
     <div class="legend-item"><div class="legend-dot" style="background:#2f9e63;"></div>월세</div>
 </div>
 <div id="map"></div>
-</div>
-</div>
-
+</div></div>
 <script>
-var script = document.createElement('script');
-script.src = '//dapi.kakao.com/v2/maps/sdk.js?appkey={kakao_js_key}&libraries=clusterer&autoload=false';
-script.onload = function() {{ kakao.maps.load(initMap); }};
-document.head.appendChild(script);
-
-function initMap() {{
-    var MARKERS_DATA = {markers_json};
-    var COLOR_MAP = {{ '매매':'#e5484d', '전세':'#2f6feb', '월세':'#2f9e63' }};
-
-    var mapContainer = document.getElementById('map');
-    var map = new kakao.maps.Map(mapContainer, {{
-        center: new kakao.maps.LatLng({center_lat}, {center_lng}), level: 5
-    }});
-    map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.BOTTOMRIGHT);
-    window._map = map;
-
-    var markers = [];
-    var infowindow = new kakao.maps.InfoWindow({{ zIndex: 1 }});
-
-    function popupHTML(d) {{
-        var hoqa = d.price ? d.price.toLocaleString() + '만원' : '-';
-        var avg = d.avgPrice ? d.avgPrice.toLocaleString() + '원/평' : '-';
-        var bldg = (d.year && d.floors) ? '🏗️ 준공: ' + Math.floor(d.year) + '년 / ' + Math.floor(d.floors) + '층<br>' : '';
-        var gapTxt = (d.gap !== null && d.gap !== undefined) ? ('<span style="color:' + (d.gap>0?'#1f9d57':'#e5484d') + ';font-weight:bold;">📊 시세갭: ' + (d.gap>0?'+':'') + d.gap.toFixed(1) + '%</span>') : '';
-        return '<div class="info-popup"><div class="title">' + d.name + '</div><hr>'
-            + '📍 ' + d.addr + '<br>🏷️ ' + (d.deal||'-') + ' · ' + (d.mtype||'-') + '<br>'
-            + '💰 호가: ' + hoqa + '<br>📊 평당가: ' + avg + '<br>' + bldg + gapTxt + '</div>';
-    }}
-
-    MARKERS_DATA.forEach(function(d, idx) {{
-        var color = COLOR_MAP[d.deal] || '#999';
-        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40">'
-            + '<path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z" fill="' + color + '"/>'
-            + '<circle cx="14" cy="14" r="6" fill="white"/></svg>';
-        var markerImage = new kakao.maps.MarkerImage(
-            'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg),
-            new kakao.maps.Size(28, 40), {{ offset: new kakao.maps.Point(14, 40) }});
-        var marker = new kakao.maps.Marker({{
-            position: new kakao.maps.LatLng(d.lat, d.lng), image: markerImage }});
-        marker.setMap(map);
-        markers.push(marker);
-        kakao.maps.event.addListener(marker, 'click', function() {{
-            infowindow.setContent(popupHTML(d));
-            infowindow.open(map, marker);
-            _highlightListItem(idx);
-        }});
-    }});
-
-    window._markers = markers;
-    window._markersData = MARKERS_DATA;
-    window._infowindow = infowindow;
-
-    function renderList(filter) {{
-        var container = document.getElementById('list-items');
-        container.innerHTML = '';
-        var count = 0;
-        MARKERS_DATA.forEach(function(d, i) {{
-            if (filter && filter !== '전체' && d.deal !== filter) return;
-            count++;
-            var color = COLOR_MAP[d.deal] || '#999';
-            var hoqa = d.price ? d.price.toLocaleString() + '만원' : '-';
-            var gp = (d.gap !== null && d.gap !== undefined) ? ('<span style="color:' + (d.gap>0?'#1f9d57':'#e5484d') + ';font-weight:bold;">' + (d.gap>0?'+':'') + d.gap.toFixed(1) + '%</span>') : '';
-            var div = document.createElement('div');
-            div.className = 'list-item';
-            div.setAttribute('data-idx', i);
-            div.innerHTML = '<div class="li-name"><span class="li-dot" style="background:' + color + '"></span>' + d.name + '</div>'
-                + '<div class="li-addr">' + d.addr + '</div>'
-                + '<div class="li-info"><span>' + (d.deal||'-') + '</span><span>💰 ' + hoqa + '</span>' + gp + '</div>';
-            div.onclick = function() {{ focusMarker(i); }};
-            container.appendChild(div);
-        }});
-        document.getElementById('list-count').textContent = count + '개';
-    }}
-
-    function focusMarker(idx) {{
-        var m = window._map, marker = markers[idx], d = MARKERS_DATA[idx];
-        m.setCenter(marker.getPosition());
-        m.setLevel(3);
-        infowindow.setContent(popupHTML(d));
-        infowindow.open(m, marker);
-        _highlightListItem(idx);
-    }}
-    window.focusMarker = focusMarker;
-
-    function _highlightListItem(idx) {{
-        document.querySelectorAll('.list-item').forEach(function(el) {{ el.classList.remove('active'); }});
-        var target = document.querySelector('.list-item[data-idx="' + idx + '"]');
-        if (target) {{ target.classList.add('active'); }}
-    }}
-
-    window.filterList = function() {{ renderList(document.getElementById('listDealFilter').value); }};
-    renderList('전체');
-
-    var clusterer = new kakao.maps.MarkerClusterer({{
-        map: null, averageCenter: true, minLevel: 6,
-        styles: [{{ width:'40px', height:'40px', background:'rgba(59,91,219,0.85)',
-            borderRadius:'20px', color:'#fff', textAlign:'center', lineHeight:'40px',
-            fontSize:'14px', fontWeight:'bold' }}]
-    }});
-    clusterer.addMarkers(markers);
-    window._clusterOn = false;
-    window._clusterer = clusterer;
-
-    window._distMode = false; window._drawFlag = false;
-    window._moveLine = null; window._clickLine = null; window._distOverlay = null; window._dots = [];
-
-    kakao.maps.event.addListener(map, 'click', function(e) {{
-        if (!window._distMode) return;
-        var pos = e.latLng;
-        if (!window._drawFlag) {{
-            window._drawFlag = true;
-            _deleteClickLine(); _deleteDistance(); _deleteCircleDot();
-            window._clickLine = new kakao.maps.Polyline({{ map: map, path: [pos], strokeWeight:3, strokeColor:'#db4040', strokeOpacity:1, strokeStyle:'solid' }});
-            window._moveLine = new kakao.maps.Polyline({{ strokeWeight:3, strokeColor:'#db4040', strokeOpacity:0.5, strokeStyle:'solid' }});
-            _displayCircleDot(pos, 0);
-        }} else {{
-            var path = window._clickLine.getPath();
-            path.push(pos); window._clickLine.setPath(path);
-            _displayCircleDot(pos, Math.round(window._clickLine.getLength()));
-        }}
-    }});
-    kakao.maps.event.addListener(map, 'mousemove', function(e) {{
-        if (!window._distMode || !window._drawFlag) return;
-        var pos = e.latLng, path = window._clickLine.getPath();
-        window._moveLine.setPath([path[path.length-1], pos]);
-        window._moveLine.setMap(map);
-        var dist = Math.round(window._clickLine.getLength() + window._moveLine.getLength());
-        _showDistance('<div class="dotOverlay distanceInfo">총거리 <span class="number">'+dist+'</span>m</div>', pos);
-    }});
-    kakao.maps.event.addListener(map, 'rightclick', function(e) {{
-        if (!window._distMode || !window._drawFlag) return;
-        if (window._moveLine) {{ window._moveLine.setMap(null); window._moveLine = null; }}
-        var path = window._clickLine.getPath();
-        if (path.length > 1) {{
-            var dots = window._dots;
-            if (dots[dots.length-1].distance) {{ dots[dots.length-1].distance.setMap(null); dots[dots.length-1].distance = null; }}
-            _showDistance(_getTimeHTML(Math.round(window._clickLine.getLength())), path[path.length-1]);
-        }} else {{ _deleteClickLine(); _deleteCircleDot(); _deleteDistance(); }}
-        window._drawFlag = false;
-    }});
-}}
-
-function setMapType(type) {{
-    var m = window._map; if(!m) return;
-    var btns = document.querySelectorAll('.map-type-btn');
-    btns.forEach(function(b){{ b.classList.remove('active'); }});
-    if (type==='normal') {{ m.setMapTypeId(kakao.maps.MapTypeId.ROADMAP); btns[0].classList.add('active'); }}
-    else if (type==='skyview') {{ m.setMapTypeId(kakao.maps.MapTypeId.SKYVIEW); btns[1].classList.add('active'); }}
-    else {{ m.setMapTypeId(kakao.maps.MapTypeId.HYBRID); btns[2].classList.add('active'); }}
-}}
-
-var _overlayState = {{ traffic:false, roadview:false }};
-function toggleOverlay(type) {{
-    var m = window._map; if(!m) return;
-    _overlayState[type] = !_overlayState[type];
-    var tid = (type==='traffic') ? kakao.maps.MapTypeId.TRAFFIC : kakao.maps.MapTypeId.ROADVIEW;
-    if (_overlayState[type]) m.addOverlayMapTypeId(tid); else m.removeOverlayMapTypeId(tid);
-}}
-
-window._gapLabels = [];
-function toggleGapLabels() {{
-    var on = document.getElementById('chkGapLabel').checked;
-    if (on) {{
-        window._markersData.forEach(function(d, i) {{
-            if (d.gap === null || d.gap === undefined) return;
-            var col = d.gap > 0 ? '#1f9d57' : '#e5484d';
-            var txt = (d.gap > 0 ? '+' : '') + d.gap.toFixed(1) + '%';
-            var ov = new kakao.maps.CustomOverlay({{
-                position: window._markers[i].getPosition(),
-                content: '<div style="transform:translateY(-48px);background:#fff;border:1px solid ' + col + ';color:' + col + ';font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;box-shadow:0 1px 3px rgba(0,0,0,.25);white-space:nowrap;">' + txt + '</div>',
-                yAnchor: 1, zIndex: 4
-            }});
-            ov.setMap(window._map);
-            window._gapLabels.push(ov);
-        }});
-    }} else {{
-        window._gapLabels.forEach(function(o) {{ o.setMap(null); }});
-        window._gapLabels = [];
-    }}
-}}
-
-function toggleCluster() {{
-    var m = window._map; if(!m) return;
-    window._clusterOn = !window._clusterOn;
-    var btn = document.getElementById('btnCluster');
-    if (window._clusterOn) {{ window._clusterer.setMap(m); btn.classList.add('active'); }}
-    else {{ window._clusterer.setMap(null); btn.classList.remove('active'); }}
-}}
-
-function toggleDistanceMode() {{
-    var m = window._map; if(!m) return;
-    window._distMode = !window._distMode;
-    var btn = document.getElementById('btnDistance');
-    if (window._distMode) {{ btn.classList.add('active'); m.setCursor('crosshair'); }}
-    else {{
-        btn.classList.remove('active'); m.setCursor('');
-        if (window._drawFlag) {{ window._drawFlag = false; if (window._moveLine) {{ window._moveLine.setMap(null); window._moveLine = null; }} }}
-        _deleteClickLine(); _deleteCircleDot(); _deleteDistance();
-    }}
-}}
-
-function _deleteClickLine() {{ if(window._clickLine){{ window._clickLine.setMap(null); window._clickLine=null; }} }}
-function _showDistance(content, pos) {{
-    var m = window._map;
-    if (window._distOverlay) {{ window._distOverlay.setPosition(pos); window._distOverlay.setContent(content); }}
-    else {{ window._distOverlay = new kakao.maps.CustomOverlay({{ map:m, content:content, position:pos, xAnchor:0, yAnchor:0, zIndex:3 }}); }}
-}}
-function _deleteDistance() {{ if(window._distOverlay){{ window._distOverlay.setMap(null); window._distOverlay=null; }} }}
-function _displayCircleDot(pos, dist) {{
-    var m = window._map;
-    var c = new kakao.maps.CustomOverlay({{ content:'<span class="dot"></span>', position:pos, zIndex:1 }});
-    c.setMap(m);
-    var dov = null;
-    if (dist > 0) {{
-        dov = new kakao.maps.CustomOverlay({{ content:'<div class="dotOverlay">거리 <span class="number">'+dist+'</span>m</div>', position:pos, yAnchor:1, zIndex:2 }});
-        dov.setMap(m);
-    }}
-    window._dots.push({{ circle:c, distance:dov }});
-}}
-function _deleteCircleDot() {{
-    for(var i=0;i<window._dots.length;i++) {{
-        if(window._dots[i].circle) window._dots[i].circle.setMap(null);
-        if(window._dots[i].distance) window._dots[i].distance.setMap(null);
-    }}
-    window._dots = [];
-}}
-function _getTimeHTML(dist) {{
-    var wt=dist/67|0, wh=wt>60?'<span class="number">'+Math.floor(wt/60)+'</span>시간 ':'', wm='<span class="number">'+wt%60+'</span>분';
-    var bt=dist/227|0, bh=bt>60?'<span class="number">'+Math.floor(bt/60)+'</span>시간 ':'', bm='<span class="number">'+bt%60+'</span>분';
-    return '<ul class="dotOverlay distanceInfo">'
-        +'<li><span class="label">총거리</span><span class="number">'+dist+'</span>m</li>'
-        +'<li><span class="label">도보</span>'+wh+wm+'</li>'
-        +'<li><span class="label">자전거</span>'+bh+bm+'</li></ul>';
-}}
+var MARKERS_DATA = {markers_json};
+var COLOR_MAP = {{{{ '매매':'#e5484d', '전세':'#2f6feb', '월세':'#2f9e63' }}}};
+var map = L.map('map', {{{{ zoomControl: false }}}}).setView([{center_lat}, {center_lng}], 15);
+L.control.zoom({{{{ position: 'bottomright' }}}}).addTo(map);
+L.tileLayer('https://{{{{s}}}}.tile.openstreetmap.org/{{{{z}}}}/{{{{x}}}}/{{{{y}}}}.png', {{{{ attribution: '© OpenStreetMap', maxZoom: 19 }}}}).addTo(map);
+function makeIcon(color) {{{{ var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40"><path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z" fill="' + color + '"/><circle cx="14" cy="14" r="6" fill="white"/></svg>'; return L.divIcon({{{{ html: svg, className: '', iconSize: [28, 40], iconAnchor: [14, 40], popupAnchor: [0, -40] }}}}); }}}}
+function popupHTML(d) {{{{ var hoqa = d.price ? d.price.toLocaleString() + '만원' : '-'; var avg = d.avgPrice ? d.avgPrice.toLocaleString() + '원/평' : '-'; var bldg = (d.year && d.floors) ? '🏗️ 준공: ' + Math.floor(d.year) + '년 / ' + Math.floor(d.floors) + '층<br>' : ''; var gapTxt = (d.gap !== null && d.gap !== undefined) ? '<span style="color:' + (d.gap>0?'#1f9d57':'#e5484d') + ';font-weight:bold;">📊 시세갭: ' + (d.gap>0?'+':'') + d.gap.toFixed(1) + '%</span>' : ''; return '<div style="font-family:Pretendard,sans-serif;font-size:13px;min-width:180px;line-height:1.6;"><div style="font-size:15px;font-weight:800;margin-bottom:4px;">' + d.name + '</div><hr style="margin:4px 0;border:none;border-top:1px solid #eee;">📍 ' + d.addr + '<br>🏷️ ' + (d.deal||'-') + ' · ' + (d.mtype||'-') + '<br>💰 호가: ' + hoqa + '<br>📊 평당가: ' + avg + '<br>' + bldg + gapTxt + '</div>'; }}}}
+var markers = []; var clusterGroup = L.markerClusterGroup({{{{ maxClusterRadius: 50 }}}});
+MARKERS_DATA.forEach(function(d, idx) {{{{ var color = COLOR_MAP[d.deal] || '#999'; var marker = L.marker([d.lat, d.lng], {{{{ icon: makeIcon(color) }}}}); marker.bindPopup(popupHTML(d), {{{{ maxWidth: 280 }}}}); marker.on('click', function() {{{{ _highlightListItem(idx); }}}}); marker.addTo(map); clusterGroup.addLayer(marker); markers.push(marker); }}}});
+function renderList(filter) {{{{ var container = document.getElementById('list-items'); container.innerHTML = ''; var count = 0; MARKERS_DATA.forEach(function(d, i) {{{{ if (filter && filter !== '전체' && d.deal !== filter) return; count++; var color = COLOR_MAP[d.deal] || '#999'; var hoqa = d.price ? d.price.toLocaleString() + '만원' : '-'; var gp = (d.gap !== null && d.gap !== undefined) ? '<span style="color:' + (d.gap>0?'#1f9d57':'#e5484d') + ';font-weight:bold;">' + (d.gap>0?'+':'') + d.gap.toFixed(1) + '%</span>' : ''; var div = document.createElement('div'); div.className = 'list-item'; div.setAttribute('data-idx', i); div.innerHTML = '<div class="li-name"><span class="li-dot" style="background:' + color + '"></span>' + d.name + '</div><div class="li-addr">' + d.addr + '</div><div class="li-info"><span>' + (d.deal||'-') + '</span><span>💰 ' + hoqa + '</span>' + gp + '</div>'; div.onclick = function() {{{{ focusMarker(i); }}}}; container.appendChild(div); }}}}); document.getElementById('list-count').textContent = count + '개'; }}}}
+function focusMarker(idx) {{{{ var d = MARKERS_DATA[idx], marker = markers[idx]; map.setView([d.lat, d.lng], 17); marker.openPopup(); _highlightListItem(idx); }}}}
+function _highlightListItem(idx) {{{{ document.querySelectorAll('.list-item').forEach(function(el) {{{{ el.classList.remove('active'); }}}}); var target = document.querySelector('.list-item[data-idx="' + idx + '"]'); if (target) {{{{ target.classList.add('active'); target.scrollIntoView({{{{ behavior:'smooth', block:'nearest' }}}}); }}}} }}}}
+window.filterList = function() {{{{ renderList(document.getElementById('listDealFilter').value); }}}}; renderList('전체');
+var clusterOn = false; function toggleCluster() {{{{ clusterOn = !clusterOn; var btn = document.getElementById('btnCluster'); if (clusterOn) {{{{ markers.forEach(function(m) {{{{ map.removeLayer(m); }}}}); map.addLayer(clusterGroup); btn.classList.add('active'); }}}} else {{{{ map.removeLayer(clusterGroup); markers.forEach(function(m) {{{{ m.addTo(map); }}}}); btn.classList.remove('active'); }}}} }}}}
+var gapLabelsOn = false; var gapLabelLayers = []; function toggleGapLabels() {{{{ gapLabelsOn = !gapLabelsOn; var btn = document.getElementById('btnGapLabel'); if (gapLabelsOn) {{{{ MARKERS_DATA.forEach(function(d, i) {{{{ if (d.gap === null || d.gap === undefined) return; var col = d.gap > 0 ? '#1f9d57' : '#e5484d'; var txt = (d.gap > 0 ? '+' : '') + d.gap.toFixed(1) + '%'; var icon = L.divIcon({{{{ html: '<div style="background:#fff;border:1px solid ' + col + ';color:' + col + ';font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;box-shadow:0 1px 3px rgba(0,0,0,.25);white-space:nowrap;">' + txt + '</div>', className: '', iconAnchor: [20, 48] }}}}); var lbl = L.marker([d.lat, d.lng], {{{{ icon: icon, interactive: false }}}}).addTo(map); gapLabelLayers.push(lbl); }}}}); btn.classList.add('active'); }}}} else {{{{ gapLabelLayers.forEach(function(l) {{{{ map.removeLayer(l); }}}}); gapLabelLayers = []; btn.classList.remove('active'); }}}} }}}}
+var distMode = false, distPoints = [], distLine = null, distMarkers = [], distLabels = [];
+function toggleDistanceMode() {{{{ distMode = !distMode; var btn = document.getElementById('btnDistance'); if (distMode) {{{{ btn.classList.add('active'); document.getElementById('map').style.cursor = 'crosshair'; }}}} else {{{{ btn.classList.remove('active'); document.getElementById('map').style.cursor = ''; clearDistance(); }}}} }}}}
+function clearDistance() {{{{ if (distLine) {{{{ map.removeLayer(distLine); distLine = null; }}}} distMarkers.forEach(function(m) {{{{ map.removeLayer(m); }}}}); distLabels.forEach(function(l) {{{{ map.removeLayer(l); }}}}); distPoints = []; distMarkers = []; distLabels = []; }}}}
+map.on('click', function(e) {{{{ if (!distMode) return; distPoints.push(e.latlng); var dot = L.circleMarker(e.latlng, {{{{ radius:5, color:'#db4040', fillColor:'#db4040', fillOpacity:1 }}}}).addTo(map); distMarkers.push(dot); if (distPoints.length > 1) {{{{ if (distLine) map.removeLayer(distLine); distLine = L.polyline(distPoints, {{{{ color:'#db4040', weight:3 }}}}).addTo(map); var total = 0; for (var i = 1; i < distPoints.length; i++) {{{{ total += distPoints[i-1].distanceTo(distPoints[i]); }}}} var dist = Math.round(total); var wt = Math.floor(dist / 67), bt = Math.floor(dist / 227); var wh = wt > 60 ? Math.floor(wt/60) + '시간 ' : '', wm = (wt%60) + '분'; var bh = bt > 60 ? Math.floor(bt/60) + '시간 ' : '', bm = (bt%60) + '분'; distLabels.forEach(function(l) {{{{ map.removeLayer(l); }}}}); distLabels = []; var icon = L.divIcon({{{{ html: '<div class="dist-label">📏 ' + dist + 'm · 🚶 ' + wh + wm + ' · 🚲 ' + bh + bm + '</div>', className: '', iconAnchor: [0, -10] }}}}); var lbl = L.marker(e.latlng, {{{{ icon: icon, interactive: false }}}}).addTo(map); distLabels.push(lbl); }}}} }}}});
+map.on('contextmenu', function(e) {{{{ if (distMode) {{{{ toggleDistanceMode(); }}}} }}}});
 </script>
 </body></html>
 """
-            import streamlit.components.v1 as components
-            components.html(kakao_map_html, height=620)
-            st.caption(f"총 {len(map_rows)}개 매물 표시됨")
+        import streamlit.components.v1 as components
+        components.html(leaflet_map_html, height=620)
+        st.caption(f"총 {len(map_rows)}개 매물 표시됨")
 
 # ════════════════ 탭 4: 임장 체크리스트 ════════════════
 with tab_check:
