@@ -1018,7 +1018,7 @@ map.on('click',function(e){{if(!dm)return;dp.push(e.latlng);dms.push(L.circleMar
 map.on('contextmenu',function(){{if(dm)toggleDistanceMode();}});
 </script>
 </body></html>
-"""
+        """
         components.html(leaflet_map_html, height=620)
         st.caption(f"총 {len(map_rows)}개 매물 표시됨")
 
