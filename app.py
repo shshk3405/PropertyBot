@@ -23,8 +23,8 @@ _load_env()
 ACCENT = "#3b5bdb"
 DEAL_COLORS = {"매매": "#e5484d", "전세": "#2f6feb", "월세": "#2f9e63"}
 GAP_GOOD, GAP_BAD = "#1f9d57", "#e5484d"
-STATUS_COLORS = {"검토중": "#8a8a93", "방문예정": ACCENT, "방문완료": "#1f9d57", "보류": "#c98a00", "제외": "#b0b0b8"}
-STATUS_OPTIONS = ["검토중", "방문예정", "방문완료", "보류", "제외"]
+STATUS_COLORS = {"검토중": "#8a8a93", "방문예정": ACCENT, "관심": "#c98a00", "방문완료": "#1f9d57"}
+STATUS_OPTIONS = ["방문예정", "관심", "검토중", "방문완료"]  # 실제 노션 '상태' select 옵션과 동일하게 맞춤
 CHECK_ITEMS = ["엘리베이터 2대 이상", "누수·결로 흔적 없음", "주차 여유", "인근 혐오시설 없음", "일조·조망 양호", "관리상태 양호"]
 
 RTMS_ENDPOINTS = {
@@ -275,8 +275,9 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
     return len(props), " · ".join(parts) or "갱신 완료"
 
 
-def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area, juso, bldg, market):
-    """노션 DB에 새 페이지 생성"""
+def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area, juso, bldg, market, monthly_rent=None):
+    """노션 DB에 새 페이지 생성.
+    월세 거래의 경우 price는 보증금, monthly_rent는 매월 월세 금액을 의미한다."""
     props = {
         "매물명": {"title": [{"text": {"content": name}}]},
         "주소": {"rich_text": [{"text": {"content": address}}]},
@@ -284,7 +285,9 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
     if deal_type:
         props["거래방식"] = {"select": {"name": deal_type}}
     if price:
-        props["호가"] = {"number": price}
+        props["호가(만원)"] = {"number": price}
+    if deal_type == "월세" and monthly_rent:
+        props["월세"] = {"number": monthly_rent}
     if area:
         props["전용면적(평)"] = {"number": float(area)}
     if juso:
@@ -346,7 +349,7 @@ def load_notion_list(notion_token, db_id):
         def msel(k): return [o["name"] for o in pr.get(k, {}).get("multi_select", [])]
         rows.append({
             "매물명": txt("매물명"), "주소": txt("주소"),
-            "거래방식": sel("거래방식"), "호가": num("호가"),
+            "거래방식": sel("거래방식"), "호가": num("호가(만원)"), "월세": num("월세"),
             "매물유형": sel("매물유형"), "준공년도": num("준공년도"),
             "최고층수": num("최고층수"), "평당가(원)": num("최근 거래 평당가(원)"),
             "비교기준": txt("비교 기준"), "전용면적(평)": num("전용면적(평)"),
@@ -606,14 +609,20 @@ with tab_input:
         deal_type_sel = st.selectbox("거래방식", ["(선택 안 함)", "매매", "전세", "월세"])
         cc1, cc2 = st.columns(2)
         with cc1:
-            price_in = st.number_input("호가 (만원)", min_value=0, value=0, step=100)
+            price_label = "보증금 (만원)" if deal_type_sel == "월세" else "호가 (만원)"
+            price_in = st.number_input(price_label, min_value=0, value=0, step=100)
         with cc2:
             area_in = st.number_input("전용면적 (평)", min_value=0.0, value=0.0, step=0.1,
                                       help="입력 시 시세갭(호가 평당 vs 실거래 시세)을 계산합니다.")
+        monthly_rent_in = 0
+        if deal_type_sel == "월세":
+            monthly_rent_in = st.number_input("월세 (만원)", min_value=0, value=0, step=5,
+                                              help="매월 납부하는 월세 금액")
 
     deal_type = None if deal_type_sel == "(선택 안 함)" else deal_type_sel
     price = price_in if price_in > 0 else None
     area = area_in if area_in > 0 else None
+    monthly_rent = monthly_rent_in if (deal_type == "월세" and monthly_rent_in > 0) else None
 
     if st.button("🔍 조회", type="primary", disabled=not (name and address), use_container_width=True):
         with st.spinner("도로명주소 조회 중..."):
@@ -623,7 +632,8 @@ with tab_input:
             st.session_state.pop("lookup", None)
         else:
             res = {"name": name, "address": address, "deal_type": deal_type,
-                   "price": price, "area": area, "juso": juso, "bldg": None, "market": None}
+                   "price": price, "area": area, "monthly_rent": monthly_rent,
+                   "juso": juso, "bldg": None, "market": None}
             with st.spinner("건축물대장 조회 중..."):
                 bldg, berr, bnote = get_building_info(juso, bldg_key)
             res["bldg"] = bldg
@@ -676,6 +686,10 @@ with tab_input:
             st.caption(f"건축물대장: {res['bldg_err']}")
         if res.get("bldg_note"):
             st.caption(res["bldg_note"])
+        if res.get("deal_type") == "월세":
+            dep_txt = f"{res['price']:,}만원" if res.get("price") else "미입력"
+            rent_txt = f"{res['monthly_rent']:,}만원" if res.get("monthly_rent") else "미입력"
+            st.caption(f"🏠 보증금 {dep_txt} · 월세 {rent_txt}")
 
         # 시세 비교
         if market:
@@ -711,7 +725,8 @@ with tab_input:
                 with st.spinner("노션에 저장 중..."):
                     try:
                         page = save_to_notion(notion, db_id, schema, name, address,
-                                              deal_type, price, area, juso, bldg, market)
+                                              deal_type, price, area, juso, bldg, market,
+                                              monthly_rent)
                         st.success(f"✅ 저장 완료! [페이지 열기]({page.get('url','')})")
                         st.session_state.pop("lookup", None)
                     except Exception as e:
@@ -773,6 +788,7 @@ with tab_list:
                     "거래": r.get("거래방식", ""),
                     "주소": r.get("주소", ""),
                     "호가": r.get("호가"),
+                    "월세": r.get("월세"),
                     "시세갭": (f"{r['_gap']:+.1f}%" if r["_gap"] is not None else "—"),
                     "평당가(원)": r.get("평당가(원)"),
                     "준공": r.get("준공년도"),
@@ -789,7 +805,8 @@ with tab_list:
                     "거래": st.column_config.SelectboxColumn("거래", options=["매매", "전세", "월세"], width="small"),
                     "매물명": st.column_config.TextColumn("매물명"),
                     "주소": st.column_config.TextColumn("주소"),
-                    "호가": st.column_config.NumberColumn("호가", format="%d만"),
+                    "호가": st.column_config.NumberColumn("호가", format="%d만", help="월세 거래는 보증금"),
+                    "월세": st.column_config.NumberColumn("월세", format="%d만", disabled=True),
                     "시세갭": st.column_config.TextColumn("시세갭", help="양수=저평가", disabled=True),
                     "평당가(원)": st.column_config.NumberColumn("평당가", format="%d원", disabled=True),
                     "준공": st.column_config.NumberColumn("준공", format="%d년", disabled=True),
@@ -821,7 +838,7 @@ with tab_list:
                         new_hoga = edited["호가"][i]
                         new_hoga = int(new_hoga) if pd.notna(new_hoga) else None
                         if new_hoga != orig[i]["호가"]:
-                            props["호가"] = {"number": new_hoga}
+                            props["호가(만원)"] = {"number": new_hoga}
                         new_deal = str(edited["거래"][i] or "").strip()
                         if new_deal and new_deal != orig[i]["거래"]:
                             props["거래방식"] = {"select": {"name": new_deal}}
