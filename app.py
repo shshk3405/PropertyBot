@@ -64,6 +64,8 @@ def search_address(address, juso_key):
 
 
 def get_building_info(j, bldg_key):
+    """건축물대장 조회. 반환: (item, error_msg, note)
+    note: 여러 동이 조회되어 첫 번째 동만 사용한 경우 사용자에게 보여줄 경고 문구."""
     r = requests.get("https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
         params={"serviceKey": bldg_key, "sigunguCd": j["sigunguCd"],
                 "bjdongCd": j["bjdongCd"], "platGbCd": j["platGbCd"],
@@ -71,11 +73,24 @@ def get_building_info(j, bldg_key):
                 "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=30)
     items = r.json().get("response", {}).get("body", {}).get("items", {})
     if not items:
-        return None, "건축물대장 조회 결과 없음"
+        return None, "건축물대장 조회 결과 없음", None
     item = items.get("item")
+    note = None
     if isinstance(item, list):
+        if len(item) > 1:
+            note = (f"⚠️ 같은 지번에 건물 {len(item)}동이 조회됨 — 첫 번째 동 기준 정보입니다. "
+                    "위반건축물 여부는 동마다 다를 수 있으니 정확한 동을 지정해 재확인이 필요합니다.")
         item = item[0] if item else None
-    return item, None
+    return item, None, note
+
+
+def parse_violation(bldg):
+    """위반건축물 여부 파싱. 'Y' / 'N' / None(정보없음·확인불가) 중 하나를 반환한다.
+    API가 빈 값·누락 값을 줄 때 이를 '위반 없음(N)'으로 단정하지 않기 위한 헬퍼."""
+    if not bldg:
+        return None
+    v = (bldg.get("vltnBldYn") or "").strip().upper()
+    return v if v in ("Y", "N") else None
 
 
 def map_type(purpose, max_floor=None):
@@ -201,7 +216,7 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
     if err or not juso:
         return 0, f"도로명주소 조회 실패: {err or '결과 없음'}"
 
-    bldg, berr = get_building_info(juso, bldg_key)
+    bldg, berr, bnote = get_building_info(juso, bldg_key)
     props, mtype = {}, None
     if juso.get("roadAddr"):
         props["도로명 주소"] = {"rich_text": [{"text": {"content": juso["roadAddr"]}}]}
@@ -225,7 +240,11 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
             mtype = map_type(purpose, int(bldg.get("grndFlrCnt") or 0) or None)
             if mtype:
                 props["매물유형"] = {"select": {"name": mtype}}
-        props["위반건축물"] = {"checkbox": bldg.get("vltnBldYn", "N") == "Y"}
+        vio = parse_violation(bldg)
+        if vio is not None:
+            props["위반건축물"] = {"checkbox": vio == "Y"}
+        # vio가 None(정보없음/확인불가)이면 필드를 건드리지 않는다 —
+        # "정보없음"을 "위반없음"으로 오기록하지 않기 위함.
 
     deal_type = row.get("거래방식")
     market = None
@@ -251,6 +270,8 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
         parts.append("실거래 비교 없음")
     if bldg:
         parts.append("건축물대장 갱신")
+    if bnote:
+        parts.append("⚠️ 다동(多棟) 매칭 — 정확한 동 재확인 필요")
     return len(props), " · ".join(parts) or "갱신 완료"
 
 
@@ -287,7 +308,10 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
             mtype = map_type(purpose, int(bldg.get("grndFlrCnt") or 0) or None)
             if mtype:
                 props["매물유형"] = {"select": {"name": mtype}}
-        props["위반건축물"] = {"checkbox": bldg.get("vltnBldYn", "N") == "Y"}
+        vio = parse_violation(bldg)
+        if vio is not None:
+            props["위반건축물"] = {"checkbox": vio == "Y"}
+        # vio가 None이면 저장하지 않음 (정보없음 → 위반없음 오기록 방지)
     if market:
         props["최근 거래 평당가(원)"] = {"number": market["avg"]}
         props["비교 거래 건수"] = {"number": market["count"]}
@@ -601,9 +625,10 @@ with tab_input:
             res = {"name": name, "address": address, "deal_type": deal_type,
                    "price": price, "area": area, "juso": juso, "bldg": None, "market": None}
             with st.spinner("건축물대장 조회 중..."):
-                bldg, berr = get_building_info(juso, bldg_key)
+                bldg, berr, bnote = get_building_info(juso, bldg_key)
             res["bldg"] = bldg
             res["bldg_err"] = berr
+            res["bldg_note"] = bnote
             if bldg and deal_type:
                 mtype = map_type(bldg.get("mainPurpsCdNm", ""),
                                  int(bldg.get("grndFlrCnt") or 0) or None)
@@ -640,13 +665,17 @@ with tab_input:
         m4, m5, m6 = st.columns(3)
         if bldg:
             m4.metric("건폐율 / 용적률", f"{bldg.get('bcRat','?')}% / {bldg.get('vlRat','?')}%")
-            m5.metric("위반건축물", "있음 ⚠️" if bldg.get("vltnBldYn") == "Y" else "없음")
+            vio = parse_violation(bldg)
+            vio_label = {"Y": "있음 ⚠️", "N": "없음", None: "확인불가"}[vio]
+            m5.metric("위반건축물", vio_label)
         else:
             m4.metric("건폐율 / 용적률", "—")
-            m5.metric("위반건축물", "—")
+            m5.metric("위반건축물", "확인불가")
         m6.metric("PNU", juso["pnu"] if juso else "—")
         if res.get("bldg_err"):
             st.caption(f"건축물대장: {res['bldg_err']}")
+        if res.get("bldg_note"):
+            st.caption(res["bldg_note"])
 
         # 시세 비교
         if market:
