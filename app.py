@@ -19,6 +19,28 @@ def _load_env():
                     os.environ.setdefault(k.strip(), v.strip())
 _load_env()
 
+# ── 공용 HTTP 세션 (연결 재사용 + 자동 재시도) ──────────────
+# Streamlit Cloud(해외 서버) → 한국 공공데이터 API 호출 시 간헐적 타임아웃 대응.
+# 매 요청마다 새 TCP/TLS 연결을 맺는 대신 커넥션을 재사용하고,
+# 일시적 실패(타임아웃 포함)는 지수 백오프로 최대 2회 자동 재시도한다.
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+def _build_session():
+    s = requests.Session()
+    retry = Retry(
+        total=2, connect=2, read=2, backoff_factor=1.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET", "POST", "PATCH"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+SESSION = _build_session()
+
 # ── 디자인 상수 ───────────────────────────────────────────
 ACCENT = "#3b5bdb"
 DEAL_COLORS = {"매매": "#e5484d", "전세": "#2f6feb", "월세": "#2f9e63"}
@@ -39,7 +61,7 @@ RTMS_ENDPOINTS = {
 # ── API 함수 ──────────────────────────────────────────────
 
 def search_address(address, juso_key):
-    r = requests.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
+    r = SESSION.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
         params={"confmKey": juso_key, "currentPage": 1, "countPerPage": 10,
                 "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=25)
     data = r.json()
@@ -66,7 +88,7 @@ def search_address(address, juso_key):
 def get_building_info(j, bldg_key):
     """건축물대장 조회. 반환: (item, error_msg, note)
     note: 여러 동이 조회되어 첫 번째 동만 사용한 경우 사용자에게 보여줄 경고 문구."""
-    r = requests.get("https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
+    r = SESSION.get("https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
         params={"serviceKey": bldg_key, "sigunguCd": j["sigunguCd"],
                 "bjdongCd": j["bjdongCd"], "platGbCd": j["platGbCd"],
                 "bun": j["bun"], "ji": j["ji"],
@@ -106,11 +128,11 @@ def map_type(purpose, max_floor=None):
 def geocode_address(road_addr, kakao_key):
     """도로명주소 → 위도/경도 (카카오 Geocoding)"""
     try:
-        r = requests.get(
+        r = SESSION.get(
             "https://dapi.kakao.com/v2/local/search/address.json",
             params={"query": road_addr},
             headers={"Authorization": f"KakaoAK {kakao_key}"},
-            timeout=10
+            timeout=20
         )
         resp_data = r.json()
         docs = resp_data.get("documents", [])
@@ -124,56 +146,60 @@ def geocode_address(road_addr, kakao_key):
         return None, None, str(e)
 
 
-def get_market_price(j, mtype, deal_type, bldg_key, months=6):
+def get_market_price(j, mtype, deal_type, bldg_key, months=6, early_stop_n=20):
     endpoint = RTMS_ENDPOINTS.get((mtype, deal_type))
     if not endpoint or len(j["sigunguCd"]) != 5: return None
     url = f"https://apis.data.go.kr/1613000/{endpoint}"
-    all_deals = []
     today = datetime.now()
+    same_road, same_dong = [], []
+    months_scanned = 0
+
     for i in range(months):
         yr, mo = today.year, today.month - i
         while mo <= 0: mo += 12; yr -= 1
         try:
-            r = requests.get(url, params={"serviceKey": bldg_key, "LAWD_CD": j["sigunguCd"],
+            r = SESSION.get(url, params={"serviceKey": bldg_key, "LAWD_CD": j["sigunguCd"],
                 "DEAL_YMD": f"{yr}{mo:02d}", "pageNo": "1", "numOfRows": "1000"}, timeout=30)
             root = ET.fromstring(r.content)
             rc = root.find(".//resultCode")
             if rc is None or rc.text not in ("00", "000"): continue
+            months_scanned += 1
             for item in root.findall(".//item"):
-                all_deals.append({c.tag: (c.text or "").strip() for c in item})
+                d = {c.tag: (c.text or "").strip() for c in item}
+                try:
+                    is_road = j["rn"] and j["rn"] in d.get("도로명", "")
+                    is_dong = j["emdNm"] and j["emdNm"] in d.get("법정동", "")
+                    if not is_road and not is_dong: continue
+                    area = float(d.get("전용면적", 0))
+                    if area <= 0: continue
+                    pyeong = area / 3.3058
+                    price = None
+                    if deal_type == "매매":
+                        a = d.get("거래금액", "").replace(",", "")
+                        price = int(a) * 10000 / pyeong if a else None
+                    elif deal_type == "전세":
+                        if int(d.get("월세금액", "0").replace(",", "") or "0") > 0: continue
+                        dep = d.get("보증금액", "").replace(",", "")
+                        price = int(dep) * 10000 / pyeong if dep else None
+                    elif deal_type == "월세":
+                        w = int(d.get("월세금액", "0").replace(",", "") or "0")
+                        price = w * 10000 / pyeong if w > 0 else None
+                    if price and price > 0:
+                        (same_road if is_road else same_dong).append(price)
+                except Exception: continue
         except Exception: continue
-    if not all_deals: return None
 
-    same_road, same_dong = [], []
-    for d in all_deals:
-        try:
-            is_road = j["rn"] and j["rn"] in d.get("도로명", "")
-            is_dong = j["emdNm"] and j["emdNm"] in d.get("법정동", "")
-            if not is_road and not is_dong: continue
-            area = float(d.get("전용면적", 0))
-            if area <= 0: continue
-            pyeong = area / 3.3058
-            price = None
-            if deal_type == "매매":
-                a = d.get("거래금액", "").replace(",", "")
-                price = int(a) * 10000 / pyeong if a else None
-            elif deal_type == "전세":
-                if int(d.get("월세금액", "0").replace(",", "") or "0") > 0: continue
-                dep = d.get("보증금액", "").replace(",", "")
-                price = int(dep) * 10000 / pyeong if dep else None
-            elif deal_type == "월세":
-                w = int(d.get("월세금액", "0").replace(",", "") or "0")
-                price = w * 10000 / pyeong if w > 0 else None
-            if price and price > 0:
-                (same_road if is_road else same_dong).append(price)
-        except Exception: continue
+        # 도로명 기준 표본이 충분히 모였고 최소 2개월은 훑었으면 이후 달은 조회하지 않음
+        # (해외 서버 → 국내 API 호출 왕복이 느려서, 불필요한 호출을 줄이는 게 체감 속도에 큰 영향)
+        if len(same_road) >= early_stop_n and months_scanned >= 2:
+            break
 
     pool = same_road or same_dong
     if not pool: return None
     basis = "도로명" if same_road else "법정동"
     avg = int(sum(pool) / len(pool))
     return {"avg": avg, "count": len(pool),
-            "basis": f"{deal_type} · 같은 {basis} {len(pool)}건 (최근 {months}개월)"}
+            "basis": f"{deal_type} · 같은 {basis} {len(pool)}건 (최근 {months_scanned}개월 조회)"}
 
 
 # ── 노션 스키마 인식 / 저장 / 수정 ────────────────────────
@@ -182,7 +208,7 @@ def get_market_price(j, mtype, deal_type, bldg_key, months=6):
 def get_db_schema(notion_token, db_id):
     """노션 DB에 존재하는 속성명→타입 맵 (없는 컬럼 저장 시도 방지용)"""
     try:
-        r = requests.get(f"https://api.notion.com/v1/databases/{db_id}",
+        r = SESSION.get(f"https://api.notion.com/v1/databases/{db_id}",
             headers={"Authorization": f"Bearer {notion_token}", "Notion-Version": "2022-06-28"},
             timeout=30)
         props = r.json().get("properties", {})
@@ -199,7 +225,7 @@ def filter_props(props, schema):
 
 
 def update_notion_page(notion_token, page_id, props):
-    requests.patch(
+    SESSION.patch(
         f"https://api.notion.com/v1/pages/{page_id}",
         headers={"Authorization": f"Bearer {notion_token}",
                  "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
@@ -327,7 +353,7 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
 
 def load_notion_list(notion_token, db_id):
     """노션 DB 매물 목록 조회 (직접 HTTP)"""
-    resp = requests.post(
+    resp = SESSION.post(
         f"https://api.notion.com/v1/databases/{db_id}/query",
         headers={"Authorization": f"Bearer {notion_token}",
                  "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
@@ -899,7 +925,7 @@ with tab_list:
                     deleted, failed = 0, 0
                     for pid in selected_ids:
                         try:
-                            requests.patch(f"https://api.notion.com/v1/pages/{pid}",
+                            SESSION.patch(f"https://api.notion.com/v1/pages/{pid}",
                                 headers={"Authorization": f"Bearer {notion_token}",
                                          "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
                                 json={"archived": True}, timeout=25)
