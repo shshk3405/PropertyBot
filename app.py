@@ -440,11 +440,18 @@ html, body, [class*="css"], .stApp, button, input, textarea, select {
 .block-container { padding-top:1.6rem; max-width:1280px; }
 h1 { font-weight:800; letter-spacing:-.6px; }
 h3, .stSubheader { font-weight:800; letter-spacing:-.3px; }
-/* 탭 */
-.stTabs [data-baseweb="tab-list"] { gap:2px; border-bottom:1px solid #e8e8ec; }
-.stTabs [data-baseweb="tab"] { font-weight:600; font-size:14px; padding:9px 16px; }
-.stTabs [aria-selected="true"] { color:__ACCENT__; }
-.stTabs [data-baseweb="tab-highlight"] { background:__ACCENT__; }
+/* 탭처럼 보이게 만든 라디오 메뉴 (st.tabs는 rerun 시 선택 상태가 초기화되는 문제가 있어 대체) */
+div[data-testid="stRadio"] > div[role="radiogroup"] {
+    flex-direction:row; gap:2px; border-bottom:1px solid #e8e8ec; flex-wrap:wrap;
+}
+div[data-testid="stRadio"] label {
+    padding:9px 16px; border-radius:8px 8px 0 0; font-weight:600; font-size:14px;
+    background:transparent; cursor:pointer; border:none; margin-bottom:-1px;
+}
+div[data-testid="stRadio"] label > div:first-child { display:none; }
+div[data-testid="stRadio"] label:has(input:checked) {
+    color:__ACCENT__; border-bottom:2px solid __ACCENT__;
+}
 /* metric을 카드처럼 */
 [data-testid="stMetric"] {
     background:#fff; border:1px solid #ececef; border-radius:13px;
@@ -535,11 +542,14 @@ if schema:
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
 
-tab_dash, tab_input, tab_list, tab_map, tab_check = st.tabs(
-    ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트"])
+TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트"]
+if "active_tab" not in st.session_state:
+    st.session_state["active_tab"] = TAB_LABELS[0]
+active_tab = st.radio("메뉴", TAB_LABELS, horizontal=True,
+                      label_visibility="collapsed", key="active_tab")
 
 # ════════════════ 탭 0: 대시보드 ════════════════
-with tab_dash:
+if active_tab == TAB_LABELS[0]:
     st.subheader("대시보드")
     try:
         rows = load_notion_list(notion_token, db_id)
@@ -623,7 +633,7 @@ with tab_dash:
                 st.caption("거래방식 데이터가 없어요.")
 
 # ════════════════ 탭 1: 새 매물 입력 ════════════════
-with tab_input:
+elif active_tab == TAB_LABELS[1]:
     st.subheader("새 매물 입력")
     st.caption("주소만 입력하면 도로명주소·건축물대장·실거래가 API가 자동으로 정보를 채웁니다.")
 
@@ -767,7 +777,7 @@ with tab_input:
             st.caption("결과를 확인한 뒤 저장됩니다. (조회 ↔ 저장 분리)")
 
 # ════════════════ 탭 2: 매물 목록 ════════════════
-with tab_list:
+elif active_tab == TAB_LABELS[2]:
     st.subheader("매물 목록")
     cr1, cr2 = st.columns([1, 5])
     with cr1:
@@ -971,7 +981,7 @@ with tab_list:
                     st.cache_data.clear(); st.rerun()
 
 # ════════════════ 탭 3: 임장 지도 ════════════════
-with tab_map:
+elif active_tab == TAB_LABELS[3]:
     st.subheader("임장 지도")
     st.caption("좌표는 노션에 캐싱돼 다음부터 즉시 로딩됩니다. 🖱️ 클릭→선 그리기(거리 측정), 우클릭→종료")
 
@@ -1105,7 +1115,7 @@ map.on('contextmenu',function(){if(dm)tD()});
 
 
 # ════════════════ 탭 4: 임장 체크리스트 ════════════════
-with tab_check:
+elif active_tab == TAB_LABELS[4]:
     st.subheader("임장 체크리스트")
     st.caption("방문 상태·평점·현장 체크·메모를 매물별로 기록하세요.")
 
