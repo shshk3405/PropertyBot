@@ -635,13 +635,16 @@ with tab_input:
         deal_type_sel = st.selectbox("거래방식", ["(선택 안 함)", "매매", "전세", "월세"])
         cc1, cc2 = st.columns(2)
         with cc1:
-            price_label = "보증금 (만원)" if deal_type_sel == "월세" else "호가 (만원)"
+            price_label = "보증금 (만원)" if deal_type_sel in ("전세", "월세") else "호가 (만원)"
             price_in = st.number_input(price_label, min_value=0, value=0, step=100)
         with cc2:
             area_in = st.number_input("전용면적 (평)", min_value=0.0, value=0.0, step=0.1,
                                       help="입력 시 시세갭(호가 평당 vs 실거래 시세)을 계산합니다.")
         monthly_rent_in = 0
+        if deal_type_sel == "전세":
+            st.caption("💡 전세는 '보증금' 칸에 전세금 전액을 입력하세요. (호가 개념 없음)")
         if deal_type_sel == "월세":
+            st.caption("💡 위 칸엔 보증금을, 아래 칸엔 매월 월세를 각각 입력하세요.")
             monthly_rent_in = st.number_input("월세 (만원)", min_value=0, value=0, step=5,
                                               help="매월 납부하는 월세 금액")
 
@@ -716,6 +719,9 @@ with tab_input:
             dep_txt = f"{res['price']:,}만원" if res.get("price") else "미입력"
             rent_txt = f"{res['monthly_rent']:,}만원" if res.get("monthly_rent") else "미입력"
             st.caption(f"🏠 보증금 {dep_txt} · 월세 {rent_txt}")
+        elif res.get("deal_type") == "전세":
+            dep_txt = f"{res['price']:,}만원" if res.get("price") else "미입력"
+            st.caption(f"🏠 보증금(전세금) {dep_txt}")
 
         # 시세 비교
         if market:
@@ -912,6 +918,34 @@ with tab_list:
                     st.cache_data.clear(); st.rerun()
                 else:
                     st.warning(f"⚠️ {msg}")
+
+            st.write("")
+            st.caption(f"매물이 많으면 시간이 걸려요 (건당 API 호출 여러 번 → 최대 몇십 초/건). "
+                       f"호가·전용면적처럼 사람이 입력한 값은 갱신되지 않고, 건축물대장·실거래 시세만 새로 받아옵니다.")
+            if st.button(f"🔄🔄 전체 재조회 ({len(filtered)}건)", use_container_width=True):
+                prog = st.progress(0.0, text="재조회 시작...")
+                ok, fail, fail_msgs = 0, 0, []
+                for idx, target in enumerate(filtered):
+                    label = target.get("매물명") or "(이름없음)"
+                    prog.progress(idx / len(filtered), text=f"{label} 재조회 중... ({idx + 1}/{len(filtered)})")
+                    try:
+                        n, msg = relookup_and_update(notion_token, db_id, schema,
+                                                     target, juso_key, bldg_key)
+                        if n:
+                            ok += 1
+                        else:
+                            fail += 1
+                            fail_msgs.append(f"{label}: {msg}")
+                    except Exception as e:
+                        fail += 1
+                        fail_msgs.append(f"{label}: {e}")
+                prog.progress(1.0, text="완료")
+                st.success(f"✅ 전체 재조회 완료 — 성공 {ok}건 / 실패·정보없음 {fail}건")
+                if fail_msgs:
+                    with st.expander(f"⚠️ {len(fail_msgs)}건 상세 보기"):
+                        for m in fail_msgs:
+                            st.write(m)
+                st.cache_data.clear(); st.rerun()
 
             selected_ids = [page_ids[i] for i, v in enumerate(edited["삭제"]) if v]
             if selected_ids:
