@@ -422,9 +422,49 @@ def badge(text, color):
             f"background:{color}1a;padding:3px 9px;border-radius:6px;'>{text}</span>")
 
 
+def load_guide_sections(path):
+    """마크다운 가이드 파일을 '## ' 헤더 기준으로 섹션 분리.
+    반환: [(제목, 본문), ...] 첫 요소는 최상단 인트로(# 제목 + 요약 블록)."""
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    parts = re.split(r"\n(?=## )", text)
+    sections = []
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        lines = p.split("\n", 1)
+        title = lines[0].lstrip("#").strip()
+        body = lines[1] if len(lines) > 1 else ""
+        sections.append((title, body))
+    return sections
+
+
 # ── Streamlit UI ─────────────────────────────────────────
 
 st.set_page_config(page_title="PropertyBot", page_icon="🏠", layout="wide", initial_sidebar_state="collapsed")
+
+# ── (선택) 비밀번호 게이트 ─────────────────────────────────
+# APP_PASSWORD 환경변수(.env 또는 Streamlit Secrets)를 설정해두면
+# 앱 접속 시 비밀번호를 물어봄. 설정 안 해두면 지금처럼 그대로 공개 접근.
+_APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+if _APP_PASSWORD and not st.session_state.get("_authed"):
+    st.markdown("<div style='max-width:360px;margin:80px auto 0;text-align:center;'>"
+                "<div style='font-size:40px;'>🔒</div>"
+                "<h3>PropertyBot</h3></div>", unsafe_allow_html=True)
+    _c1, _c2, _c3 = st.columns([1, 1.2, 1])
+    with _c2:
+        _pw = st.text_input("비밀번호", type="password", label_visibility="collapsed",
+                            placeholder="비밀번호를 입력하세요")
+        if st.button("입장", use_container_width=True, type="primary"):
+            if _pw == _APP_PASSWORD:
+                st.session_state["_authed"] = True
+                st.rerun()
+            else:
+                st.error("비밀번호가 틀렸어요.")
+    st.stop()
 
 # Pretendard 웹폰트: Streamlit이 <style> 안의 @import를 차단하므로 <link>로 직접 주입
 st.markdown(
@@ -542,7 +582,7 @@ if schema:
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
 
-TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트"]
+TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트", "📖 매수 가이드"]
 if "active_tab" not in st.session_state:
     st.session_state["active_tab"] = TAB_LABELS[0]
 active_tab = st.radio("메뉴", TAB_LABELS, horizontal=True,
@@ -1182,3 +1222,27 @@ elif active_tab == TAB_LABELS[4]:
                                 st.cache_data.clear()
                             except Exception as e:
                                 st.error(f"저장 실패: {e}")
+
+# ════════════════ 탭 5: 매수 가이드 (개인용) ════════════════
+elif active_tab == TAB_LABELS[5]:
+    st.subheader("📖 매수 가이드")
+    st.caption("나만 보는 개인 재정·매매 절차 메모입니다. (민감한 금액 정보가 포함되어 있어요)")
+
+    _guide_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buying_guide.md")
+    _sections = load_guide_sections(_guide_path)
+
+    if not _APP_PASSWORD:
+        st.warning("⚠️ 이 탭엔 소득·증여액 등 민감한 정보가 들어있는데, 지금 앱은 비밀번호 없이 "
+                   "누구나 URL로 접속 가능한 상태예요. 사이드바 안내대로 `APP_PASSWORD`를 "
+                   "설정해 접근을 제한하는 걸 권장합니다.")
+
+    if not _sections:
+        st.error(f"가이드 파일을 찾을 수 없어요. `{os.path.basename(_guide_path)}` 파일을 "
+                 f"`app.py`와 같은 폴더에 두세요. (Streamlit Cloud라면 GitHub 레포에도 같이 커밋 필요)")
+    else:
+        _intro_title, _intro_body = _sections[0]
+        st.markdown(f"## {_intro_title}")
+        st.markdown(_intro_body)
+        for _title, _body in _sections[1:]:
+            with st.expander(_title, expanded=False):
+                st.markdown(_body)
