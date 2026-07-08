@@ -29,7 +29,7 @@ from urllib3.util.retry import Retry
 def _build_session():
     s = requests.Session()
     retry = Retry(
-        total=2, connect=2, read=2, backoff_factor=1.5,
+        total=3, connect=4, read=2, backoff_factor=2,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=frozenset(["GET", "POST", "PATCH"]),
         raise_on_status=False,
