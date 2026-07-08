@@ -1,7 +1,7 @@
 """
 PropertyBot v4.0 - 대시보드 · 입력 · 목록 · 지도 · 임장 체크리스트
 """
-import os, re, requests, xml.etree.ElementTree as ET
+import os, re, time, requests, xml.etree.ElementTree as ET
 from datetime import datetime, date
 import pandas as pd
 import streamlit as st
@@ -41,6 +41,21 @@ def _build_session():
 
 SESSION = _build_session()
 
+
+def friendly_error(e):
+    """예외를 사용자가 읽을 수 있는 짧은 한국어 메시지로 변환.
+    (raw 스택트레이스·URL·API키 노출 방지 — 특히 네트워크 예외가 화면에 그대로 뜨는 걸 막기 위함)"""
+    name = type(e).__name__
+    if isinstance(e, requests.exceptions.ConnectTimeout):
+        return "서버 연결 시간 초과 — 네트워크가 느리거나 해당 서버가 응답하지 않고 있어요. 잠시 후 다시 시도해주세요."
+    if isinstance(e, requests.exceptions.ReadTimeout):
+        return "응답 대기 시간 초과 — 서버가 느리게 응답하고 있어요. 잠시 후 다시 시도해주세요."
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return "서버에 연결할 수 없어요 (네트워크 문제). 잠시 후 다시 시도해주세요."
+    if isinstance(e, requests.exceptions.RequestException):
+        return f"네트워크 오류가 발생했어요 ({name})."
+    return f"오류가 발생했어요 ({name}: {str(e)[:120]})"
+
 # ── 디자인 상수 ───────────────────────────────────────────
 ACCENT = "#3b5bdb"
 DEAL_COLORS = {"매매": "#e5484d", "전세": "#2f6feb", "월세": "#2f9e63"}
@@ -61,10 +76,13 @@ RTMS_ENDPOINTS = {
 # ── API 함수 ──────────────────────────────────────────────
 
 def search_address(address, juso_key):
-    r = SESSION.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
-        params={"confmKey": juso_key, "currentPage": 1, "countPerPage": 10,
-                "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=25)
-    data = r.json()
+    try:
+        r = SESSION.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
+            params={"confmKey": juso_key, "currentPage": 1, "countPerPage": 10,
+                    "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=25)
+        data = r.json()
+    except Exception as e:
+        return None, friendly_error(e)
     common = data.get("results", {}).get("common", {})
     if common.get("errorCode") != "0":
         return None, f"도로명주소 API 에러: {common.get('errorMessage')}"
@@ -88,12 +106,15 @@ def search_address(address, juso_key):
 def get_building_info(j, bldg_key):
     """건축물대장 조회. 반환: (item, error_msg, note)
     note: 여러 동이 조회되어 첫 번째 동만 사용한 경우 사용자에게 보여줄 경고 문구."""
-    r = SESSION.get("https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
-        params={"serviceKey": bldg_key, "sigunguCd": j["sigunguCd"],
-                "bjdongCd": j["bjdongCd"], "platGbCd": j["platGbCd"],
-                "bun": j["bun"], "ji": j["ji"],
-                "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=30)
-    items = r.json().get("response", {}).get("body", {}).get("items", {})
+    try:
+        r = SESSION.get("https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
+            params={"serviceKey": bldg_key, "sigunguCd": j["sigunguCd"],
+                    "bjdongCd": j["bjdongCd"], "platGbCd": j["platGbCd"],
+                    "bun": j["bun"], "ji": j["ji"],
+                    "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=30)
+        items = r.json().get("response", {}).get("body", {}).get("items", {})
+    except Exception as e:
+        return None, friendly_error(e), None
     if not items:
         return None, "건축물대장 조회 결과 없음", None
     item = items.get("item")
@@ -143,23 +164,29 @@ def geocode_address(road_addr, kakao_key):
             return None, None, f"카카오 API 오류 {err_code}: {resp_data.get('msg','')}"
         return None, None, f"결과 없음 (쿼리: {road_addr[:40]})"
     except Exception as e:
-        return None, None, str(e)
+        return None, None, friendly_error(e)
 
 
-def get_market_price(j, mtype, deal_type, bldg_key, months=6, early_stop_n=20):
+def get_market_price(j, mtype, deal_type, bldg_key, months=6, early_stop_n=20, time_budget=40):
+    """실거래가 조회. time_budget(초)을 넘기면 데이터가 희소해도 그 시점까지 모은 것만으로 반환.
+    (빌라·월세처럼 거래가 희소한 유형은 조기 종료 기준에 못 미쳐 6개월을 다 훑는 경우가 있는데,
+    그때마다 매달 API가 느리면 전체가 지나치게 오래 걸리는 걸 막기 위함)"""
     endpoint = RTMS_ENDPOINTS.get((mtype, deal_type))
     if not endpoint or len(j["sigunguCd"]) != 5: return None
     url = f"https://apis.data.go.kr/1613000/{endpoint}"
     today = datetime.now()
     same_road, same_dong = [], []
     months_scanned = 0
+    started = time.monotonic()
 
     for i in range(months):
+        if time.monotonic() - started > time_budget:
+            break
         yr, mo = today.year, today.month - i
         while mo <= 0: mo += 12; yr -= 1
         try:
             r = SESSION.get(url, params={"serviceKey": bldg_key, "LAWD_CD": j["sigunguCd"],
-                "DEAL_YMD": f"{yr}{mo:02d}", "pageNo": "1", "numOfRows": "1000"}, timeout=30)
+                "DEAL_YMD": f"{yr}{mo:02d}", "pageNo": "1", "numOfRows": "1000"}, timeout=15)
             root = ET.fromstring(r.content)
             rc = root.find(".//resultCode")
             if rc is None or rc.text not in ("00", "000"): continue
@@ -579,7 +606,7 @@ if active_tab == TAB_LABELS[0]:
         rows = load_notion_list(notion_token, db_id)
     except Exception as e:
         rows = []
-        st.error(f"데이터 로드 실패: {e}")
+        st.error(f"데이터 로드 실패: {friendly_error(e)}")
 
     if not rows:
         st.info("저장된 매물이 없어요. '새 매물 입력'에서 먼저 추가해보세요.")
@@ -796,7 +823,7 @@ elif active_tab == TAB_LABELS[1]:
                         st.success(f"✅ 저장 완료! [페이지 열기]({page.get('url','')})")
                         st.session_state.pop("lookup", None)
                     except Exception as e:
-                        st.error(f"노션 저장 실패: {e}")
+                        st.error(f"노션 저장 실패: {friendly_error(e)}")
         with sc2:
             st.caption("결과를 확인한 뒤 저장됩니다. (조회 ↔ 저장 분리)")
 
@@ -813,7 +840,7 @@ elif active_tab == TAB_LABELS[2]:
         rows = load_notion_list(notion_token, db_id)
     except Exception as e:
         rows = []
-        st.error(f"목록 조회 실패: {e}")
+        st.error(f"목록 조회 실패: {friendly_error(e)}")
 
     if not rows:
         st.info("저장된 매물이 없어요.")
@@ -978,7 +1005,7 @@ elif active_tab == TAB_LABELS[2]:
                                 st.success("✅ 저장 완료!")
                                 st.cache_data.clear(); st.rerun()
                             except Exception as e:
-                                st.error(f"저장 실패: {e}")
+                                st.error(f"저장 실패: {friendly_error(e)}")
                         else:
                             st.info("저장 가능한 속성이 없어요.")
 
@@ -1019,7 +1046,7 @@ elif active_tab == TAB_LABELS[2]:
                                     st.success("✅ 기본 정보 저장 완료!")
                                     st.cache_data.clear(); st.rerun()
                                 except Exception as e:
-                                    st.error(f"저장 실패: {e}")
+                                    st.error(f"저장 실패: {friendly_error(e)}")
 
                 # 액션: 재조회 · 삭제
                 st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
@@ -1030,7 +1057,7 @@ elif active_tab == TAB_LABELS[2]:
                             try:
                                 n, msg = relookup_and_update(notion_token, db_id, schema, sel, juso_key, bldg_key)
                             except Exception as e:
-                                n, msg = 0, f"재조회 실패: {e}"
+                                n, msg = 0, f"재조회 실패: {friendly_error(e)}"
                         if n:
                             st.success(f"✅ 갱신 — {msg}")
                             st.cache_data.clear(); st.rerun()
@@ -1054,7 +1081,7 @@ elif active_tab == TAB_LABELS[2]:
                                 st.success("✅ 삭제 완료!")
                                 st.cache_data.clear(); st.rerun()
                             except Exception as e:
-                                st.error(f"삭제 실패: {e}")
+                                st.error(f"삭제 실패: {friendly_error(e)}")
                     with dcol2:
                         if st.button("취소", key="delcancel"):
                             st.session_state.pop("confirm_del", None); st.rerun()
@@ -1087,7 +1114,7 @@ elif active_tab == TAB_LABELS[2]:
                         else:
                             fail += 1; fail_msgs.append(f"{_label}: {msg}")
                     except Exception as e:
-                        fail += 1; fail_msgs.append(f"{_label}: {e}")
+                        fail += 1; fail_msgs.append(f"{_label}: {friendly_error(e)}")
                 prog.progress(1.0, text="완료")
                 st.success(f"✅ 전체 재조회 완료 — 성공 {ok}건 / 실패·정보없음 {fail}건")
                 if fail_msgs:
@@ -1137,7 +1164,7 @@ elif active_tab == TAB_LABELS[3]:
         try:
             map_rows, map_failed = get_map_data(juso_key, notion_token, db_id, kakao_key, schema)
         except Exception as e:
-            st.error(f"지도 데이터 로드 실패: {e}")
+            st.error(f"지도 데이터 로드 실패: {friendly_error(e)}")
             map_rows, map_failed = [], []
 
     if map_failed:
@@ -1245,7 +1272,7 @@ elif active_tab == TAB_LABELS[4]:
         rows = load_notion_list(notion_token, db_id)
     except Exception as e:
         rows = []
-        st.error(f"데이터 로드 실패: {e}")
+        st.error(f"데이터 로드 실패: {friendly_error(e)}")
 
     if not rows:
         st.info("저장된 매물이 없어요.")
@@ -1297,7 +1324,7 @@ elif active_tab == TAB_LABELS[4]:
                                 st.success("✅ 저장 완료!")
                                 st.cache_data.clear()
                             except Exception as e:
-                                st.error(f"저장 실패: {e}")
+                                st.error(f"저장 실패: {friendly_error(e)}")
 
 # ════════════════ 탭 5: 매수 가이드 (개인용) ════════════════
 elif active_tab == TAB_LABELS[5]:
