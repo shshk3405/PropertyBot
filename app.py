@@ -328,9 +328,11 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
     return len(props), " · ".join(parts) or "갱신 완료"
 
 
-def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area, juso, bldg, market, monthly_rent=None):
+def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area, juso, bldg, market, monthly_rent=None, extra_details=None):
     """노션 DB에 새 페이지 생성.
-    월세 거래의 경우 price는 보증금, monthly_rent는 매월 월세 금액을 의미한다."""
+    월세 거래의 경우 price는 보증금, monthly_rent는 매월 월세 금액을 의미한다.
+    extra_details: {"방향": str, "관리비(만원)": int, "입주가능일": date|None,
+                     "총주차대수": int, "세대당주차대수": int, "방수욕실수": str, "특징메모": str} 형태의 선택 필드."""
     props = {
         "매물명": {"title": [{"text": {"content": name}}]},
         "주소": {"rich_text": [{"text": {"content": address}}]},
@@ -343,6 +345,21 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
         props["월세"] = {"number": monthly_rent}
     if area:
         props["전용면적(평)"] = {"number": float(area)}
+    if extra_details:
+        if extra_details.get("방향"):
+            props["방향"] = {"rich_text": [{"text": {"content": extra_details["방향"]}}]}
+        if extra_details.get("관리비(만원)"):
+            props["관리비(만원)"] = {"number": extra_details["관리비(만원)"]}
+        if extra_details.get("입주가능일"):
+            props["입주가능일"] = {"date": {"start": extra_details["입주가능일"].isoformat()}}
+        if extra_details.get("총주차대수"):
+            props["총주차대수"] = {"number": extra_details["총주차대수"]}
+        if extra_details.get("세대당주차대수"):
+            props["세대당주차대수"] = {"number": extra_details["세대당주차대수"]}
+        if extra_details.get("방수욕실수"):
+            props["방수욕실수"] = {"rich_text": [{"text": {"content": extra_details["방수욕실수"]}}]}
+        if extra_details.get("특징메모"):
+            props["특징메모"] = {"rich_text": [{"text": {"content": extra_details["특징메모"]}}]}
     if juso:
         props["도로명 주소"] = {"rich_text": [{"text": {"content": juso["roadAddr"]}}]}
         props["PNU 코드"] = {"rich_text": [{"text": {"content": juso["pnu"]}}]}
@@ -409,6 +426,10 @@ def load_notion_list(notion_token, db_id):
             "상태": sel("상태"), "관심": chk("관심"), "평점": num("평점"),
             "메모": txt("메모"), "방문일": dt("방문일"), "임장체크": msel("임장체크"),
             "위도": num("위도"), "경도": num("경도"),
+            "방향": txt("방향"), "관리비(만원)": num("관리비(만원)"),
+            "입주가능일": dt("입주가능일"), "총주차대수": num("총주차대수"),
+            "세대당주차대수": num("세대당주차대수"),
+            "방수욕실수": txt("방수욕실수"), "특징메모": txt("특징메모"),
             "page_id": p["id"],
         })
     return rows
@@ -574,7 +595,7 @@ schema = get_db_schema(notion_token, db_id)
 # 노션 DB에 권장되는 컬럼 안내 (없는 컬럼만 노란불로 표시) ──
 _REC_COLS = [
     ("전용면적(평)", "숫자(Number)", "시세갭·평당가 계산에 필수"),
-    ("상태", "선택(Select)", "검토중·관심·방문예정·보류·제외"),
+    ("상태", "선택(Select)", "방문예정·관심·검토중·방문완료"),
     ("관심", "체크박스(Checkbox)", "⭐ 즐겨찾기"),
     ("평점", "숫자(Number)", "0~5점 임장 평가"),
     ("방문일", "날짜(Date)", "임장 방문 날짜"),
@@ -582,6 +603,13 @@ _REC_COLS = [
     ("임장체크", "다중 선택(Multi-select)", "체크리스트 항목"),
     ("위도", "숫자(Number)", "지도 좌표 캐시"),
     ("경도", "숫자(Number)", "지도 좌표 캐시"),
+    ("방향", "텍스트(Text)", "예: 북서향"),
+    ("관리비(만원)", "숫자(Number)", "월 관리비"),
+    ("입주가능일", "날짜(Date)", "예: 2026-10-25"),
+    ("총주차대수", "숫자(Number)", "예: 16"),
+    ("세대당주차대수", "숫자(Number)", "예: 1"),
+    ("방수욕실수", "텍스트(Text)", "예: 3/2"),
+    ("특징메모", "텍스트(Text)", "매물설명·특징 등 자유 기록"),
 ]
 if schema:
     _missing = [c for c in _REC_COLS if c[0] not in schema]
@@ -714,6 +742,34 @@ elif active_tab == TAB_LABELS[1]:
     area = area_in if area_in > 0 else None
     monthly_rent = monthly_rent_in if (deal_type == "월세" and monthly_rent_in > 0) else None
 
+    with st.expander("🏷️ 상세 정보 (선택 — 네이버부동산 등에서 확인한 값 그대로 적어두면 됨)", expanded=False):
+        dc1, dc2, dc3 = st.columns(3)
+        with dc1:
+            in_direction = st.text_input("방향", placeholder="예) 북서향")
+        with dc2:
+            in_mgmt_fee = st.number_input("관리비 (만원)", min_value=0, value=0, step=1)
+        with dc3:
+            in_rooms_baths = st.text_input("방수/욕실수", placeholder="예) 3/2")
+        dc4, dc5, dc6 = st.columns(3)
+        with dc4:
+            in_move_in = st.date_input("입주가능일", value=None, format="YYYY-MM-DD")
+        with dc5:
+            in_parking_total = st.number_input("총주차대수", min_value=0, value=0, step=1)
+        with dc6:
+            in_parking_per_unit = st.number_input("세대당주차대수", min_value=0, value=0, step=1)
+        in_feature_memo = st.text_area("특징메모", placeholder="매물특징·매물설명 등 자유롭게 붙여넣기 (협의사항 등도 여기에)",
+                                       height=80)
+
+    extra_details = {
+        "방향": in_direction.strip() if in_direction.strip() else None,
+        "관리비(만원)": in_mgmt_fee if in_mgmt_fee > 0 else None,
+        "입주가능일": in_move_in if in_move_in else None,
+        "총주차대수": in_parking_total if in_parking_total > 0 else None,
+        "세대당주차대수": in_parking_per_unit if in_parking_per_unit > 0 else None,
+        "방수욕실수": in_rooms_baths.strip() if in_rooms_baths.strip() else None,
+        "특징메모": in_feature_memo.strip() if in_feature_memo.strip() else None,
+    }
+
     if st.button("🔍 조회", type="primary", disabled=not (name and address), use_container_width=True):
         with st.spinner("도로명주소 조회 중..."):
             juso, err = search_address(address, juso_key)
@@ -723,6 +779,7 @@ elif active_tab == TAB_LABELS[1]:
         else:
             res = {"name": name, "address": address, "deal_type": deal_type,
                    "price": price, "area": area, "monthly_rent": monthly_rent,
+                   "extra_details": extra_details,
                    "juso": juso, "bldg": None, "market": None}
             with st.spinner("건축물대장 조회 중..."):
                 bldg, berr, bnote = get_building_info(juso, bldg_key)
@@ -819,7 +876,7 @@ elif active_tab == TAB_LABELS[1]:
                     try:
                         page = save_to_notion(notion, db_id, schema, name, address,
                                               deal_type, price, area, juso, bldg, market,
-                                              monthly_rent)
+                                              monthly_rent, extra_details)
                         st.success(f"✅ 저장 완료! [페이지 열기]({page.get('url','')})")
                         st.session_state.pop("lookup", None)
                     except Exception as e:
@@ -976,6 +1033,35 @@ elif active_tab == TAB_LABELS[2]:
                 tile_html += "</div>"
                 st.markdown(tile_html, unsafe_allow_html=True)
 
+                # 매물 상세 정보 (방향·관리비·입주가능일·주차대수·방수욕실수 중 하나라도 있으면 표시)
+                _park_total, _park_unit = sel.get("총주차대수"), sel.get("세대당주차대수")
+                if _park_total and _park_unit:
+                    _park_txt = f"{int(_park_total)}대(세대당 {int(_park_unit)}대)"
+                elif _park_total:
+                    _park_txt = f"{int(_park_total)}대"
+                else:
+                    _park_txt = None
+                _detail_items = [
+                    ("방향", sel.get("방향")),
+                    ("관리비", f"{int(sel['관리비(만원)']):,}만원" if sel.get("관리비(만원)") else None),
+                    ("입주가능일", sel.get("입주가능일") or None),
+                    ("총주차대수", _park_txt),
+                    ("방수/욕실수", sel.get("방수욕실수")),
+                ]
+                _detail_items = [(k, v) for k, v in _detail_items if v]
+                if _detail_items:
+                    _dh = "<div style='display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;'>"
+                    for _k, _v in _detail_items:
+                        _dh += (f"<span style='font-size:12px;background:#f5f5f7;border-radius:8px;"
+                               f"padding:5px 10px;color:#57575f;'><b style='color:#33333c;'>{_k}</b> {_v}</span>")
+                    _dh += "</div>"
+                    st.markdown(_dh, unsafe_allow_html=True)
+                if sel.get("특징메모"):
+                    st.markdown(f"<div style='margin-top:8px;padding:10px 14px;background:#fafafa;"
+                               f"border-left:3px solid #ececef;border-radius:4px;font-size:13px;"
+                               f"color:#57575f;white-space:pre-wrap;'>{sel['특징메모']}</div>",
+                               unsafe_allow_html=True)
+
                 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
                 # 임장 기록 편집
@@ -1047,6 +1133,56 @@ elif active_tab == TAB_LABELS[2]:
                                     st.cache_data.clear(); st.rerun()
                                 except Exception as e:
                                     st.error(f"저장 실패: {friendly_error(e)}")
+
+                # 매물 상세 정보 수정 (방향·관리비·입주가능일·주차대수·방수욕실수·특징메모)
+                with st.expander("🏷️ 매물 상세 정보 수정", expanded=False):
+                    _cur_move_in = None
+                    if sel.get("입주가능일"):
+                        try:
+                            _cur_move_in = datetime.fromisoformat(sel["입주가능일"]).date()
+                        except Exception:
+                            _cur_move_in = None
+                    with st.form(key="details_" + sel["page_id"]):
+                        de1, de2, de3 = st.columns(3)
+                        with de1:
+                            d_dir = st.text_input("방향", value=sel.get("방향") or "", placeholder="예) 북서향")
+                        with de2:
+                            d_mgmt = st.number_input("관리비 (만원)", min_value=0,
+                                                     value=int(sel.get("관리비(만원)") or 0), step=1)
+                        with de3:
+                            d_rb = st.text_input("방수/욕실수", value=sel.get("방수욕실수") or "", placeholder="예) 3/2")
+                        de4, de5, de6 = st.columns(3)
+                        with de4:
+                            d_move = st.date_input("입주가능일", value=_cur_move_in, format="YYYY-MM-DD")
+                        with de5:
+                            d_park_total = st.number_input("총주차대수", min_value=0,
+                                                           value=int(sel.get("총주차대수") or 0), step=1)
+                        with de6:
+                            d_park_unit = st.number_input("세대당주차대수", min_value=0,
+                                                          value=int(sel.get("세대당주차대수") or 0), step=1)
+                        d_memo = st.text_area("특징메모", value=sel.get("특징메모") or "",
+                                              placeholder="매물특징·매물설명 등 자유롭게", height=80)
+                        if st.form_submit_button("💾 상세 정보 저장", type="primary"):
+                            dprops = {
+                                "방향": {"rich_text": [{"text": {"content": d_dir.strip()}}]},
+                                "관리비(만원)": {"number": int(d_mgmt) if d_mgmt > 0 else None},
+                                "입주가능일": {"date": {"start": d_move.isoformat()} if d_move else None},
+                                "총주차대수": {"number": int(d_park_total) if d_park_total > 0 else None},
+                                "세대당주차대수": {"number": int(d_park_unit) if d_park_unit > 0 else None},
+                                "방수욕실수": {"rich_text": [{"text": {"content": d_rb.strip()}}]},
+                                "특징메모": {"rich_text": [{"text": {"content": d_memo.strip()}}]},
+                            }
+                            dprops = filter_props(dprops, schema)
+                            if dprops:
+                                try:
+                                    update_notion_page(notion_token, sel["page_id"], dprops)
+                                    st.success("✅ 상세 정보 저장 완료!")
+                                    st.cache_data.clear(); st.rerun()
+                                except Exception as e:
+                                    st.error(f"저장 실패: {friendly_error(e)}")
+                            else:
+                                st.info("저장 가능한 속성이 없어요. 노션 DB에 방향·관리비(만원)·입주가능일·"
+                                       "총주차대수·세대당주차대수·방수욕실수·특징메모 컬럼을 먼저 추가해주세요.")
 
                 # 액션: 재조회 · 삭제
                 st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
