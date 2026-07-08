@@ -800,14 +800,14 @@ elif active_tab == TAB_LABELS[1]:
         with sc2:
             st.caption("결과를 확인한 뒤 저장됩니다. (조회 ↔ 저장 분리)")
 
-# ════════════════ 탭 2: 매물 목록 ════════════════
+# ════════════════ 탭 2: 매물 목록 (마스터–디테일) ════════════════
 elif active_tab == TAB_LABELS[2]:
     st.subheader("매물 목록")
-    cr1, cr2 = st.columns([1, 5])
-    with cr1:
+
+    tb1, _tbrest = st.columns([1, 5])
+    with tb1:
         if st.button("🔄 새로고침", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
+            st.cache_data.clear(); st.rerun()
 
     try:
         rows = load_notion_list(notion_token, db_id)
@@ -821,188 +821,280 @@ elif active_tab == TAB_LABELS[2]:
         for r in rows:
             r["_gap"] = compute_gap(r)
 
-        cf1, cf2, _ = st.columns([1, 1, 2])
-        with cf1:
-            deal_types = sorted(set(r.get("거래방식", "") for r in rows if r.get("거래방식")))
-            deal_filter = st.selectbox("거래방식", ["전체"] + deal_types)
-        with cf2:
-            sort_option = st.selectbox("정렬", ["최신순", "시세갭 높은순", "호가 낮은순", "호가 높은순", "평당가 낮은순"])
+        left, right = st.columns([1, 1.9], gap="medium")
 
-        filtered = rows if deal_filter == "전체" else [r for r in rows if r.get("거래방식") == deal_filter]
-        if sort_option == "시세갭 높은순":
-            filtered = sorted(filtered, key=lambda r: r["_gap"] if r["_gap"] is not None else -1e9, reverse=True)
-        elif sort_option == "호가 낮은순":
-            filtered = sorted(filtered, key=lambda r: r.get("호가") or float("inf"))
-        elif sort_option == "호가 높은순":
-            filtered = sorted(filtered, key=lambda r: r.get("호가") or 0, reverse=True)
-        elif sort_option == "평당가 낮은순":
-            filtered = sorted(filtered, key=lambda r: r.get("평당가(원)") or float("inf"))
+        # ── 왼쪽(마스터): 필터 + 매물 리스트 ──
+        with left:
+            fcol1, fcol2 = st.columns(2)
+            with fcol1:
+                deal_types = sorted(set(r.get("거래방식", "") for r in rows if r.get("거래방식")))
+                deal_filter = st.selectbox("거래방식", ["전체"] + deal_types, label_visibility="collapsed")
+            with fcol2:
+                sort_option = st.selectbox(
+                    "정렬", ["시세갭 높은순", "최신순", "호가 낮은순", "호가 높은순", "평당가 낮은순"],
+                    label_visibility="collapsed")
 
-        if not filtered:
-            st.info(f"'{deal_filter}' 매물이 없어요.")
-        else:
-            page_ids = [r["page_id"] for r in filtered]
-            orig = [{"관심": bool(r.get("관심")), "상태": r.get("상태") or "검토중",
-                     "평점": r.get("평점"), "매물명": r.get("매물명", ""), "주소": r.get("주소", ""), "호가": r.get("호가"), "거래": r.get("거래방식", "")} for r in filtered]
-            recs = []
+            filtered = rows if deal_filter == "전체" else [r for r in rows if r.get("거래방식") == deal_filter]
+            if sort_option == "시세갭 높은순":
+                filtered = sorted(filtered, key=lambda r: r["_gap"] if r["_gap"] is not None else -1e9, reverse=True)
+            elif sort_option == "호가 낮은순":
+                filtered = sorted(filtered, key=lambda r: r.get("호가") or float("inf"))
+            elif sort_option == "호가 높은순":
+                filtered = sorted(filtered, key=lambda r: r.get("호가") or 0, reverse=True)
+            elif sort_option == "평당가 낮은순":
+                filtered = sorted(filtered, key=lambda r: r.get("평당가(원)") or float("inf"))
+
+            under_n = sum(1 for r in rows if r["_gap"] is not None and r["_gap"] > 0)
+            st.caption(f"총 {len(rows)}개 중 {len(filtered)}개 · 저평가 {under_n}건")
+
+            ids = [r["page_id"] for r in filtered]
+            if not ids:
+                st.info(f"'{deal_filter}' 매물이 없어요.")
+                st.stop()
+            if st.session_state.get("list_sel") not in ids:
+                st.session_state["list_sel"] = ids[0]
+
             for r in filtered:
-                recs.append({
-                    "삭제": False,
-                    "관심": bool(r.get("관심")),
-                    "상태": r.get("상태") or "검토중",
-                    "매물명": r.get("매물명", ""),
-                    "거래": r.get("거래방식", ""),
-                    "주소": r.get("주소", ""),
-                    "호가": r.get("호가"),
-                    "월세": r.get("월세"),
-                    "시세갭": (f"{r['_gap']:+.1f}%" if r["_gap"] is not None else "—"),
-                    "평당가(원)": r.get("평당가(원)"),
-                    "준공": r.get("준공년도"),
-                    "평점": r.get("평점"),
-                })
-            df = pd.DataFrame(recs)
+                is_sel = r["page_id"] == st.session_state["list_sel"]
+                dc = DEAL_COLORS.get(r.get("거래방식"), "#999")
+                gap = r["_gap"]
+                gcol = GAP_GOOD if (gap or 0) > 0 else GAP_BAD
+                gtxt = f"{gap:+.1f}%" if gap is not None else "—"
+                price_txt = fmt_eok(r.get("호가")) if r.get("호가") else "—"
+                star = "★" if r.get("관심") else ""
+                if is_sel:
+                    st.markdown(
+                        f"<div style='border:1.5px solid {ACCENT};background:#f4f6fe;border-radius:12px;"
+                        f"padding:11px 13px;margin-bottom:8px;'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+                        f"<span style='font-weight:800;font-size:14px;'>{r.get('매물명','')}</span>"
+                        f"<span style='color:#c98a00;'>{star}</span></div>"
+                        f"<div style='font-size:12px;color:#9a9aa3;margin-top:2px;'>{r.get('주소','')}</div>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:9px;'>"
+                        f"<span>{badge(r.get('거래방식','-'), dc)} <b style='font-size:13px;margin-left:4px;'>{price_txt}</b></span>"
+                        f"<b style='color:{gcol};'>{gtxt}</b></div></div>",
+                        unsafe_allow_html=True)
+                else:
+                    label = f"{(star + ' ') if star else ''}{r.get('매물명','')}  ·  {price_txt}  ·  {gtxt}"
+                    if st.button(label, key="pick_" + r["page_id"], use_container_width=True):
+                        st.session_state["list_sel"] = r["page_id"]
+                        st.rerun()
 
-            edited = st.data_editor(
-                df, use_container_width=True, hide_index=True,
-                column_config={
-                    "삭제": st.column_config.CheckboxColumn("🗑️", width="small"),
-                    "관심": st.column_config.CheckboxColumn("⭐", width="small"),
-                    "상태": st.column_config.SelectboxColumn("상태", options=STATUS_OPTIONS, width="small"),
-                    "거래": st.column_config.SelectboxColumn("거래", options=["매매", "전세", "월세"], width="small"),
-                    "매물명": st.column_config.TextColumn("매물명"),
-                    "주소": st.column_config.TextColumn("주소"),
-                    "호가": st.column_config.NumberColumn("호가", format="%d만", help="월세 거래는 보증금"),
-                    "월세": st.column_config.NumberColumn("월세", format="%d만", disabled=True),
-                    "시세갭": st.column_config.TextColumn("시세갭", help="양수=저평가", disabled=True),
-                    "평당가(원)": st.column_config.NumberColumn("평당가", format="%d원", disabled=True),
-                    "준공": st.column_config.NumberColumn("준공", format="%d년", disabled=True),
-                    "평점": st.column_config.NumberColumn("평점", min_value=0.0, max_value=5.0, step=0.5),
-                })
-            st.caption(f"총 {len(rows)}개 중 {len(filtered)}개 표시됨 · 저평가 "
-                       f"{sum(1 for r in rows if r['_gap'] is not None and r['_gap'] > 0)}건")
+        # ── 오른쪽(디테일): 선택 매물 상세 ──
+        with right:
+            sel = next((r for r in filtered if r["page_id"] == st.session_state["list_sel"]), None)
+            if sel:
+                sc = STATUS_COLORS.get(sel.get("상태"), "#8a8a93")
+                nurl = "https://www.notion.so/" + str(sel["page_id"]).replace("-", "")
+                st.markdown(
+                    f"<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:14px;'>"
+                    f"<div><div style='font-size:24px;font-weight:800;letter-spacing:-.6px;'>{sel.get('매물명','')} "
+                    f"<span style='font-size:12px;font-weight:700;color:{sc};background:{sc}1a;padding:3px 10px;"
+                    f"border-radius:99px;vertical-align:middle;'>{sel.get('상태') or '검토중'}</span></div>"
+                    f"<div style='font-size:13px;color:#8a8a93;margin-top:4px;'>{sel.get('주소','')} · "
+                    f"{sel.get('매물유형') or '유형 미상'}</div></div>"
+                    f"<a href='{nurl}' target='_blank' style='font-size:12.5px;font-weight:700;color:{ACCENT};"
+                    f"text-decoration:none;white-space:nowrap;'>노션에서 열기 ↗</a></div>",
+                    unsafe_allow_html=True)
 
-            ca1, ca2, ca3 = st.columns([1.2, 1.2, 3])
-            with ca1:
-                if st.button("💾 변경사항 저장", use_container_width=True):
-                    changed = 0
-                    for i, pid in enumerate(page_ids):
-                        props = {}
-                        if edited["관심"][i] != orig[i]["관심"]:
-                            props["관심"] = {"checkbox": bool(edited["관심"][i])}
-                        if edited["상태"][i] != orig[i]["상태"]:
-                            props["상태"] = {"select": {"name": edited["상태"][i]}}
-                        ev = edited["평점"][i]
-                        ev = float(ev) if pd.notna(ev) else None
-                        if ev != orig[i]["평점"]:
-                            props["평점"] = {"number": ev}
-                        new_name = str(edited["매물명"][i] or "").strip()
-                        if new_name and new_name != orig[i]["매물명"]:
-                            props["매물명"] = {"title": [{"text": {"content": new_name}}]}
-                        new_addr = str(edited["주소"][i] or "").strip()
-                        if new_addr and new_addr != orig[i]["주소"]:
-                            props["주소"] = {"rich_text": [{"text": {"content": new_addr}}]}
-                        new_hoga = edited["호가"][i]
-                        new_hoga = int(new_hoga) if pd.notna(new_hoga) else None
-                        if new_hoga != orig[i]["호가"]:
-                            props["호가(만원)"] = {"number": new_hoga}
-                        new_deal = str(edited["거래"][i] or "").strip()
-                        if new_deal and new_deal != orig[i]["거래"]:
-                            props["거래방식"] = {"select": {"name": new_deal}}
+                # 비교 히어로
+                hoga_py = int(sel["호가"] * 10000 / sel["전용면적(평)"]) if (sel.get("호가") and sel.get("전용면적(평)")) else None
+                sise = sel.get("평당가(원)")
+                gap = sel["_gap"]
+                if hoga_py and sise:
+                    gcol = GAP_GOOD if (gap or 0) > 0 else GAP_BAD
+                    glabel = f"{gap:+.1f}% {'저평가' if gap > 0 else '고평가'}"
+                    mx = max(hoga_py, sise)
+                    hw = hoga_py / mx * 100
+                    sw = sise / mx * 100
+                    st.markdown(
+                        f"<div style='background:#fff;border:1px solid #ececef;border-radius:14px;padding:18px 20px;margin-top:14px;'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;'>"
+                        f"<b style='font-size:15px;'>💰 호가 vs 실거래 시세 <span style='color:#9a9aa3;font-weight:600;'>(평당)</span></b>"
+                        f"<span style='font-weight:800;color:{gcol};background:{gcol}1a;padding:5px 14px;border-radius:99px;'>{glabel}</span></div>"
+                        f"<div style='display:flex;gap:36px;margin-bottom:14px;'>"
+                        f"<div><div style='font-size:11px;color:#9a9aa3;font-weight:700;'>호가 평당</div>"
+                        f"<div style='font-size:26px;font-weight:800;letter-spacing:-.8px;'>{fmt_eok_won(hoga_py)}</div></div>"
+                        f"<div><div style='font-size:11px;color:{ACCENT};font-weight:700;'>실거래 시세 평당</div>"
+                        f"<div style='font-size:26px;font-weight:800;letter-spacing:-.8px;color:{ACCENT};'>{fmt_eok_won(sise)}</div>"
+                        f"<div style='font-size:11px;color:#a4a4ac;margin-top:2px;'>{sel.get('비교기준') or ''}</div></div></div>"
+                        f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:6px;'>"
+                        f"<span style='width:52px;font-size:11px;color:#9a9aa3;font-weight:700;text-align:right;'>호가</span>"
+                        f"<div style='flex:1;height:13px;background:#f0f0f3;border-radius:99px;overflow:hidden;'>"
+                        f"<div style='height:100%;width:{hw:.0f}%;background:#c3ccef;border-radius:99px;'></div></div></div>"
+                        f"<div style='display:flex;align-items:center;gap:10px;'>"
+                        f"<span style='width:52px;font-size:11px;color:{ACCENT};font-weight:700;text-align:right;'>실거래</span>"
+                        f"<div style='flex:1;height:13px;background:#f0f0f3;border-radius:99px;overflow:hidden;'>"
+                        f"<div style='height:100%;width:{sw:.0f}%;background:{ACCENT};border-radius:99px;'></div></div></div>"
+                        f"</div>", unsafe_allow_html=True)
+                else:
+                    st.info("전용면적(평)·호가·평당가가 모두 있어야 시세 비교가 나와요. 아래 '재조회'로 평당가를 받아오세요.")
+
+                # 건축물대장 타일
+                area_txt = f"{sel['전용면적(평)']:.1f}평" if sel.get("전용면적(평)") else "—"
+                tiles = [
+                    ("준공년도", f"{int(sel['준공년도'])}년" if sel.get("준공년도") else "—"),
+                    ("최고층수", f"{int(sel['최고층수'])}층" if sel.get("최고층수") else "—"),
+                    ("전용면적", area_txt),
+                    ("실거래 평당", fmt_eok_won(sise) if sise else "—"),
+                    ("거래방식", sel.get("거래방식") or "—"),
+                    ("시세갭", f"{gap:+.1f}%" if gap is not None else "—"),
+                ]
+                tile_html = "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px;'>"
+                for _lb, _vl in tiles:
+                    tile_html += (
+                        f"<div style='background:#fff;border:1px solid #ececef;border-radius:12px;padding:12px 14px;'>"
+                        f"<div style='font-size:11px;color:#9a9aa3;font-weight:700;'>{_lb}</div>"
+                        f"<div style='font-size:16px;font-weight:800;margin-top:3px;'>{_vl}</div></div>")
+                tile_html += "</div>"
+                st.markdown(tile_html, unsafe_allow_html=True)
+
+                st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+                # 임장 기록 편집
+                with st.form(key="detail_" + sel["page_id"]):
+                    ec1, ec2, ec3 = st.columns(3)
+                    with ec1:
+                        cur = sel.get("상태") or "검토중"
+                        new_status = st.selectbox("상태", STATUS_OPTIONS,
+                                                  index=STATUS_OPTIONS.index(cur) if cur in STATUS_OPTIONS else 0)
+                    with ec2:
+                        new_rating = st.slider("평점", 0.0, 5.0, float(sel.get("평점") or 0.0), 0.5)
+                    with ec3:
+                        new_fav = st.checkbox("⭐ 관심", value=bool(sel.get("관심")))
+                    new_memo = st.text_area("메모", value=sel.get("메모") or "",
+                                            placeholder="채광·소음·주차·관리상태·주변 환경 등 현장 인상")
+                    if st.form_submit_button("💾 변경사항 저장", type="primary"):
+                        props = {
+                            "상태": {"select": {"name": new_status}},
+                            "평점": {"number": float(new_rating)},
+                            "관심": {"checkbox": bool(new_fav)},
+                            "메모": {"rich_text": [{"text": {"content": new_memo}}]},
+                        }
                         props = filter_props(props, schema)
                         if props:
                             try:
-                                update_notion_page(notion_token, pid, props)
-                                changed += 1
-                            except Exception:
-                                pass
-                    if changed:
-                        st.success(f"✅ {changed}건 업데이트")
-                        st.cache_data.clear(); st.rerun()
-                    else:
-                        st.info("변경사항이 없어요.")
-            with ca2:
-                st.download_button("⬇️ CSV 내보내기",
-                    df.drop(columns=["삭제"]).to_csv(index=False).encode("utf-8-sig"),
-                    file_name="propertybot.csv", mime="text/csv", use_container_width=True)
+                                update_notion_page(notion_token, sel["page_id"], props)
+                                st.success("✅ 저장 완료!")
+                                st.cache_data.clear(); st.rerun()
+                            except Exception as e:
+                                st.error(f"저장 실패: {e}")
+                        else:
+                            st.info("저장 가능한 속성이 없어요.")
 
-            # ── 재조회: 기존 매물의 실거래 시세·건축물대장 다시 받아 노션 갱신 ──
-            st.divider()
-            st.markdown("##### 🔄 매물 재조회")
-            st.caption("기존 매물의 실거래 시세·건축물대장을 다시 불러와 노션을 갱신합니다. "
-                       "평당가·준공·매물유형이 채워집니다. (시세갭은 전용면적(평)까지 입력돼야 계산돼요.)")
-            rc1, rc2 = st.columns([3, 1])
-            with rc1:
-                relookup_idx = st.selectbox(
-                    "재조회할 매물", range(len(filtered)),
-                    format_func=lambda i: (f"{filtered[i].get('매물명') or '(이름없음)'} · "
-                                           f"{filtered[i].get('주소') or '주소없음'}"),
-                    label_visibility="collapsed")
-            with rc2:
-                do_relookup = st.button("🔄 재조회", use_container_width=True, type="primary")
-            if do_relookup:
-                target = filtered[relookup_idx]
-                with st.spinner(f"'{target.get('매물명') or ''}' 재조회 중..."):
-                    try:
-                        n, msg = relookup_and_update(notion_token, db_id, schema,
-                                                     target, juso_key, bldg_key)
-                    except Exception as e:
-                        n, msg = 0, f"재조회 실패: {e}"
-                if n:
-                    st.success(f"✅ {target.get('매물명') or '매물'} 갱신 완료 — {msg} ({n}개 필드)")
-                    st.cache_data.clear(); st.rerun()
-                else:
-                    st.warning(f"⚠️ {msg}")
+                # 기본 정보 수정 (매물명·주소·호가·거래·면적)
+                with st.expander("✏️ 기본 정보 수정", expanded=False):
+                    with st.form(key="edit_" + sel["page_id"]):
+                        e_name = st.text_input("매물명", value=sel.get("매물명", ""))
+                        e_addr = st.text_input("주소", value=sel.get("주소", ""))
+                        ig1, ig2, ig3 = st.columns(3)
+                        with ig1:
+                            _deal_opts = ["매매", "전세", "월세"]
+                            _cur_deal = sel.get("거래방식") or "매매"
+                            e_deal = st.selectbox("거래방식", _deal_opts,
+                                                  index=_deal_opts.index(_cur_deal) if _cur_deal in _deal_opts else 0)
+                        with ig2:
+                            e_hoga = st.number_input("호가(만원)", min_value=0,
+                                                     value=int(sel.get("호가") or 0), step=100)
+                        with ig3:
+                            e_area = st.number_input("전용면적(평)", min_value=0.0,
+                                                     value=float(sel.get("전용면적(평)") or 0.0), step=0.1)
+                        e_rent = st.number_input("월세(만원, 월세 거래만)", min_value=0,
+                                                 value=int(sel.get("월세") or 0), step=5)
+                        if st.form_submit_button("💾 기본 정보 저장", type="primary"):
+                            props = {}
+                            if e_name.strip():
+                                props["매물명"] = {"title": [{"text": {"content": e_name.strip()}}]}
+                            if e_addr.strip():
+                                props["주소"] = {"rich_text": [{"text": {"content": e_addr.strip()}}]}
+                            props["거래방식"] = {"select": {"name": e_deal}}
+                            props["호가(만원)"] = {"number": int(e_hoga) if e_hoga > 0 else None}
+                            props["전용면적(평)"] = {"number": float(e_area) if e_area > 0 else None}
+                            if e_deal == "월세":
+                                props["월세"] = {"number": int(e_rent) if e_rent > 0 else None}
+                            props = filter_props(props, schema)
+                            if props:
+                                try:
+                                    update_notion_page(notion_token, sel["page_id"], props)
+                                    st.success("✅ 기본 정보 저장 완료!")
+                                    st.cache_data.clear(); st.rerun()
+                                except Exception as e:
+                                    st.error(f"저장 실패: {e}")
 
-            st.write("")
-            st.caption(f"매물이 많으면 시간이 걸려요 (건당 API 호출 여러 번 → 최대 몇십 초/건). "
-                       f"호가·전용면적처럼 사람이 입력한 값은 갱신되지 않고, 건축물대장·실거래 시세만 새로 받아옵니다.")
-            if st.button(f"🔄🔄 전체 재조회 ({len(filtered)}건)", use_container_width=True):
+                # 액션: 재조회 · 삭제
+                st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
+                act1, act2, _act3 = st.columns([1, 1, 2])
+                with act1:
+                    if st.button("🔄 재조회", use_container_width=True, key="relk_" + sel["page_id"]):
+                        with st.spinner("재조회 중..."):
+                            try:
+                                n, msg = relookup_and_update(notion_token, db_id, schema, sel, juso_key, bldg_key)
+                            except Exception as e:
+                                n, msg = 0, f"재조회 실패: {e}"
+                        if n:
+                            st.success(f"✅ 갱신 — {msg}")
+                            st.cache_data.clear(); st.rerun()
+                        else:
+                            st.warning(f"⚠️ {msg}")
+                with act2:
+                    if st.button("🗑️ 삭제", use_container_width=True, key="delbtn_" + sel["page_id"]):
+                        st.session_state["confirm_del"] = sel["page_id"]
+                if st.session_state.get("confirm_del") == sel["page_id"]:
+                    st.warning("정말 삭제할까요? 되돌릴 수 없습니다.")
+                    dcol1, dcol2, _dcol3 = st.columns([1, 1, 2])
+                    with dcol1:
+                        if st.button("삭제 확인", type="primary", key="delok"):
+                            try:
+                                SESSION.patch(f"https://api.notion.com/v1/pages/{sel['page_id']}",
+                                    headers={"Authorization": f"Bearer {notion_token}",
+                                             "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+                                    json={"archived": True}, timeout=25)
+                                st.session_state.pop("confirm_del", None)
+                                st.session_state.pop("list_sel", None)
+                                st.success("✅ 삭제 완료!")
+                                st.cache_data.clear(); st.rerun()
+                            except Exception as e:
+                                st.error(f"삭제 실패: {e}")
+                    with dcol2:
+                        if st.button("취소", key="delcancel"):
+                            st.session_state.pop("confirm_del", None); st.rerun()
+
+        # ── 하단: 일괄 도구 (CSV · 전체 재조회) ──
+        st.divider()
+        with st.expander("🛠️ 일괄 도구 — CSV 내보내기 · 전체 재조회", expanded=False):
+            exp_df = pd.DataFrame([{
+                "매물명": r.get("매물명", ""), "주소": r.get("주소", ""),
+                "거래방식": r.get("거래방식", ""), "호가": r.get("호가"), "월세": r.get("월세"),
+                "시세갭": (f"{r['_gap']:+.1f}%" if r["_gap"] is not None else ""),
+                "평당가(원)": r.get("평당가(원)"), "준공": r.get("준공년도"),
+                "상태": r.get("상태"), "평점": r.get("평점"),
+            } for r in rows])
+            st.download_button("⬇️ CSV 내보내기",
+                exp_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="propertybot.csv", mime="text/csv")
+            st.caption("건당 API 호출이 많아 시간이 걸려요. 사람이 입력한 값(호가·전용면적)은 유지되고, "
+                       "건축물대장·실거래 시세만 새로 받아옵니다.")
+            if st.button(f"🔄🔄 전체 재조회 ({len(rows)}건)"):
                 prog = st.progress(0.0, text="재조회 시작...")
                 ok, fail, fail_msgs = 0, 0, []
-                for idx, target in enumerate(filtered):
-                    label = target.get("매물명") or "(이름없음)"
-                    prog.progress(idx / len(filtered), text=f"{label} 재조회 중... ({idx + 1}/{len(filtered)})")
+                for _idx, target in enumerate(rows):
+                    _label = target.get("매물명") or "(이름없음)"
+                    prog.progress(_idx / len(rows), text=f"{_label} 재조회 중... ({_idx + 1}/{len(rows)})")
                     try:
-                        n, msg = relookup_and_update(notion_token, db_id, schema,
-                                                     target, juso_key, bldg_key)
+                        n, msg = relookup_and_update(notion_token, db_id, schema, target, juso_key, bldg_key)
                         if n:
                             ok += 1
                         else:
-                            fail += 1
-                            fail_msgs.append(f"{label}: {msg}")
+                            fail += 1; fail_msgs.append(f"{_label}: {msg}")
                     except Exception as e:
-                        fail += 1
-                        fail_msgs.append(f"{label}: {e}")
+                        fail += 1; fail_msgs.append(f"{_label}: {e}")
                 prog.progress(1.0, text="완료")
                 st.success(f"✅ 전체 재조회 완료 — 성공 {ok}건 / 실패·정보없음 {fail}건")
                 if fail_msgs:
-                    with st.expander(f"⚠️ {len(fail_msgs)}건 상세 보기"):
-                        for m in fail_msgs:
-                            st.write(m)
+                    for m in fail_msgs:
+                        st.write(m)
                 st.cache_data.clear(); st.rerun()
 
-            selected_ids = [page_ids[i] for i, v in enumerate(edited["삭제"]) if v]
-            if selected_ids:
-                st.warning(f"⚠️ {len(selected_ids)}개 매물을 삭제하시겠습니까? 되돌릴 수 없습니다.")
-                cd1, cd2, _ = st.columns([1, 1, 3])
-                with cd1:
-                    confirm_delete = st.button(f"🗑️ {len(selected_ids)}개 삭제 확인", type="primary")
-                with cd2:
-                    st.button("취소")
-                if confirm_delete:
-                    deleted, failed = 0, 0
-                    for pid in selected_ids:
-                        try:
-                            SESSION.patch(f"https://api.notion.com/v1/pages/{pid}",
-                                headers={"Authorization": f"Bearer {notion_token}",
-                                         "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-                                json={"archived": True}, timeout=25)
-                            deleted += 1
-                        except Exception:
-                            failed += 1
-                    if deleted: st.success(f"✅ {deleted}개 삭제 완료!")
-                    if failed: st.error(f"❌ {failed}개 삭제 실패")
-                    st.cache_data.clear(); st.rerun()
 
 # ════════════════ 탭 3: 임장 지도 ════════════════
 elif active_tab == TAB_LABELS[3]:
