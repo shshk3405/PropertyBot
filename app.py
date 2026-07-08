@@ -446,25 +446,9 @@ def load_guide_sections(path):
 
 st.set_page_config(page_title="PropertyBot", page_icon="🏠", layout="wide", initial_sidebar_state="collapsed")
 
-# ── (선택) 비밀번호 게이트 ─────────────────────────────────
 # APP_PASSWORD 환경변수(.env 또는 Streamlit Secrets)를 설정해두면
-# 앱 접속 시 비밀번호를 물어봄. 설정 안 해두면 지금처럼 그대로 공개 접근.
+# '매수 가이드' 탭을 열 때만 비밀번호를 물어봄 (앱 전체는 그대로 공개 접근).
 _APP_PASSWORD = os.getenv("APP_PASSWORD", "")
-if _APP_PASSWORD and not st.session_state.get("_authed"):
-    st.markdown("<div style='max-width:360px;margin:80px auto 0;text-align:center;'>"
-                "<div style='font-size:40px;'>🔒</div>"
-                "<h3>PropertyBot</h3></div>", unsafe_allow_html=True)
-    _c1, _c2, _c3 = st.columns([1, 1.2, 1])
-    with _c2:
-        _pw = st.text_input("비밀번호", type="password", label_visibility="collapsed",
-                            placeholder="비밀번호를 입력하세요")
-        if st.button("입장", use_container_width=True, type="primary"):
-            if _pw == _APP_PASSWORD:
-                st.session_state["_authed"] = True
-                st.rerun()
-            else:
-                st.error("비밀번호가 틀렸어요.")
-    st.stop()
 
 # Pretendard 웹폰트: Streamlit이 <style> 안의 @import를 차단하므로 <link>로 직접 주입
 st.markdown(
@@ -1227,6 +1211,23 @@ elif active_tab == TAB_LABELS[4]:
 elif active_tab == TAB_LABELS[5]:
     st.subheader("📖 매수 가이드")
     st.caption("나만 보는 개인 재정·매매 절차 메모입니다. (민감한 금액 정보가 포함되어 있어요)")
+
+    if _APP_PASSWORD and not st.session_state.get("_guide_authed"):
+        st.markdown("<div style='text-align:center;padding:30px 0 10px;'>"
+                    "<div style='font-size:36px;'>🔒</div>"
+                    "<div style='font-weight:700;margin-top:6px;'>비밀번호를 입력하면 가이드가 열립니다</div>"
+                    "</div>", unsafe_allow_html=True)
+        _gc1, _gc2, _gc3 = st.columns([1, 1.2, 1])
+        with _gc2:
+            _gpw = st.text_input("비밀번호", type="password", label_visibility="collapsed",
+                                 placeholder="비밀번호를 입력하세요", key="_guide_pw_input")
+            if st.button("열기", use_container_width=True, type="primary"):
+                if _gpw == _APP_PASSWORD:
+                    st.session_state["_guide_authed"] = True
+                    st.rerun()
+                else:
+                    st.error("비밀번호가 틀렸어요.")
+        st.stop()
 
     _guide_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "buying_guide.md")
     _sections = load_guide_sections(_guide_path)
