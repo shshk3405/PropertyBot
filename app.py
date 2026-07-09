@@ -1,7 +1,7 @@
 """
 PropertyBot v4.0 - 대시보드 · 입력 · 목록 · 지도 · 임장 체크리스트
 """
-import os, re, time, requests, xml.etree.ElementTree as ET
+import os, re, time, json, hashlib, requests, xml.etree.ElementTree as ET
 from datetime import datetime, date
 import pandas as pd
 import streamlit as st
@@ -77,7 +77,10 @@ RTMS_ENDPOINTS = {
 
 def search_address(address, juso_key):
     try:
-        r = SESSION.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
+        # 이 API(business.juso.go.kr)는 공용 SESSION의 자동 재시도를 쓰지 않는다.
+        # 짧은 시간에 같은 IP에서 재연결을 반복하면 오히려 서버 쪽에서 더 막힐 수 있어서,
+        # 여기서는 순수 requests.get으로 딱 1번만 시도한다.
+        r = requests.get("https://business.juso.go.kr/addrlink/addrLinkApi.do",
             params={"confmKey": juso_key, "currentPage": 1, "countPerPage": 10,
                     "keyword": address, "resultType": "json", "addInfoYn": "Y"}, timeout=25)
         data = r.json()
@@ -490,6 +493,58 @@ def load_guide_sections(path):
     return sections
 
 
+_GUIDE_CHECKLIST_RE = re.compile(r"^- \[([ xX])\] (.*)$")
+
+
+def guide_item_key(text):
+    """체크리스트 항목 텍스트로부터 안정적인 짧은 키 생성 (문서 내용이 안 바뀌는 한 유지됨)."""
+    return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
+
+
+def load_guide_progress(path):
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_guide_progress(path, progress):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(progress, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def render_guide_body(body, progress, progress_path):
+    """마크다운 본문에서 '- [ ] ' 체크리스트 줄만 실제 st.checkbox로, 나머지는 일반 마크다운으로 렌더링.
+    체크 상태는 progress 딕셔너리(항목 텍스트 해시 → bool)에 저장되고, 바뀔 때마다 파일에 즉시 기록됨."""
+    buf = []
+
+    def flush():
+        if buf:
+            st.markdown("\n".join(buf))
+            buf.clear()
+
+    for line in body.split("\n"):
+        m = _GUIDE_CHECKLIST_RE.match(line.strip())
+        if m:
+            flush()
+            item_text = m.group(2)
+            item_key = guide_item_key(item_text)
+            checked = progress.get(item_key, m.group(1).lower() == "x")
+            new_val = st.checkbox(item_text, value=checked, key=f"guide_chk_{item_key}")
+            if new_val != checked:
+                progress[item_key] = new_val
+                save_guide_progress(progress_path, progress)
+        else:
+            buf.append(line)
+    flush()
+
+
 # ── Streamlit UI ─────────────────────────────────────────
 
 st.set_page_config(page_title="PropertyBot", page_icon="🏠", layout="wide", initial_sidebar_state="collapsed")
@@ -773,14 +828,17 @@ elif active_tab == TAB_LABELS[1]:
     if st.button("🔍 조회", type="primary", disabled=not (name and address), use_container_width=True):
         with st.spinner("도로명주소 조회 중..."):
             juso, err = search_address(address, juso_key)
+        res = {"name": name, "address": address, "deal_type": deal_type,
+               "price": price, "area": area, "monthly_rent": monthly_rent,
+               "extra_details": extra_details,
+               "juso": juso, "bldg": None, "market": None, "juso_err": err}
         if err:
-            st.error(f"도로명주소: {err}")
-            st.session_state.pop("lookup", None)
+            st.warning(f"⚠️ 도로명주소 조회 실패: {err}\n\n"
+                      f"건축물대장·실거래가·정확한 도로명주소는 못 받아왔지만, "
+                      f"입력하신 매물명·주소·가격·상세정보는 그대로 저장할 수 있어요. "
+                      f"나중에 매물 목록에서 '재조회'를 누르면 이 정보가 채워집니다.")
+            st.session_state["lookup"] = res
         else:
-            res = {"name": name, "address": address, "deal_type": deal_type,
-                   "price": price, "area": area, "monthly_rent": monthly_rent,
-                   "extra_details": extra_details,
-                   "juso": juso, "bldg": None, "market": None}
             with st.spinner("건축물대장 조회 중..."):
                 bldg, berr, bnote = get_building_info(juso, bldg_key)
             res["bldg"] = bldg
@@ -798,6 +856,10 @@ elif active_tab == TAB_LABELS[1]:
     if res and res.get("name") == name and res.get("address") == address:
         juso, bldg, market = res["juso"], res["bldg"], res["market"]
         st.markdown("#### 조회 결과")
+
+        if res.get("juso_err"):
+            st.warning("⚠️ 도로명주소 조회가 실패한 상태예요 — 아래 저장 버튼으로 기본 정보만 먼저 "
+                      "저장하고, 나중에 매물 목록에서 '재조회'로 나머지를 채우시면 됩니다.")
 
         # 중복 경고
         try:
@@ -1496,9 +1558,25 @@ elif active_tab == TAB_LABELS[5]:
         st.error(f"가이드 파일을 찾을 수 없어요. `{os.path.basename(_guide_path)}` 파일을 "
                  f"`app.py`와 같은 폴더에 두세요. (Streamlit Cloud라면 GitHub 레포에도 같이 커밋 필요)")
     else:
+        _progress_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guide_progress.json")
+        if "_guide_progress" not in st.session_state:
+            st.session_state["_guide_progress"] = load_guide_progress(_progress_path)
+        _progress = st.session_state["_guide_progress"]
+
+        _total_items = sum(
+            1 for _, b in _sections for line in b.split("\n")
+            if _GUIDE_CHECKLIST_RE.match(line.strip()))
+        _done_items = sum(1 for k, v in _progress.items() if v)
+        if _total_items:
+            st.caption(f"✅ 체크리스트 진행률: {min(_done_items, _total_items)}/{_total_items}")
+
         _intro_title, _intro_body = _sections[0]
         st.markdown(f"## {_intro_title}")
-        st.markdown(_intro_body)
+        render_guide_body(_intro_body, _progress, _progress_path)
         for _title, _body in _sections[1:]:
             with st.expander(_title, expanded=False):
-                st.markdown(_body)
+                render_guide_body(_body, _progress, _progress_path)
+
+        st.caption("💾 체크 상태는 이 서버의 `guide_progress.json` 파일에 저장돼요. "
+                  "로컬(Windows)에서는 계속 유지되지만, Streamlit Cloud 무료 플랜은 앱이 "
+                  "재시작(reboot)되면 초기화될 수 있어요.")
