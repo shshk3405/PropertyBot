@@ -106,30 +106,47 @@ def search_address(address, juso_key):
     }, None
 
 
-def get_building_info(j, bldg_key):
-    """건축물대장 조회. 반환: (item, error_msg, note)
-    note: 여러 동이 조회되어 첫 번째 동만 사용한 경우 사용자에게 보여줄 경고 문구."""
+def _fetch_bldg_endpoint(endpoint, j, bldg_key):
+    """건축물대장 하위 엔드포인트 공통 호출. 반환: (item, error_msg, dong_count)"""
     try:
-        r = SESSION.get("https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo",
+        r = SESSION.get(f"https://apis.data.go.kr/1613000/BldRgstHubService/{endpoint}",
             params={"serviceKey": bldg_key, "sigunguCd": j["sigunguCd"],
                     "bjdongCd": j["bjdongCd"], "platGbCd": j["platGbCd"],
                     "bun": j["bun"], "ji": j["ji"],
                     "_type": "json", "numOfRows": "10", "pageNo": "1"}, timeout=30)
         items = r.json().get("response", {}).get("body", {}).get("items", {})
     except Exception as e:
-        return None, friendly_error(e), None
+        return None, friendly_error(e), 0
     if not items:
-        return None, "건축물대장 조회 결과 없음", None
+        return None, "조회 결과 없음", 0
     item = items.get("item")
-    note = None
+    dong_count = len(item) if isinstance(item, list) else (1 if item else 0)
     if isinstance(item, list):
-        if len(item) > 1:
-            note = (f"⚠️ 같은 지번에 건물 {len(item)}동이 조회됨 — 첫 번째 동 기준 정보입니다. "
-                    "위반건축물 여부는 동마다 다를 수 있으니 정확한 동을 지정해 재확인이 필요합니다.")
         item = item[0] if item else None
     if not item:
-        return None, "건축물대장 응답에 데이터가 없음 (item 없음 — 이 지번은 등록이 안 됐거나 API 응답 형식이 예상과 다름)", note
-    return item, None, note
+        return None, "응답에 데이터 없음 (item 없음)", 0
+    return item, None, dong_count
+
+
+def get_building_info(j, bldg_key):
+    """건축물대장 조회. 반환: (item, error_msg, note)
+    1순위로 개별 동 표제부(getBrTitleInfo)를 시도하고, 결과가 없으면(주로 여러 동으로
+    이뤄진 아파트 단지에서 동을 특정 안 했을 때 발생) 단지 전체 총괄표제부(getBrRecapTitleInfo)로
+    자동 재시도한다."""
+    item, err, dong_count = _fetch_bldg_endpoint("getBrTitleInfo", j, bldg_key)
+    if item:
+        note = None
+        if dong_count > 1:
+            note = (f"⚠️ 같은 지번에 건물 {dong_count}동이 조회됨 — 첫 번째 동 기준 정보입니다. "
+                    "위반건축물 여부는 동마다 다를 수 있으니 정확한 동을 지정해 재확인이 필요합니다.")
+        return item, None, note
+
+    item2, err2, _ = _fetch_bldg_endpoint("getBrRecapTitleInfo", j, bldg_key)
+    if item2:
+        return item2, None, ("ℹ️ 개별 동 표제부에서 데이터를 못 찾아 단지 전체 총괄표제부 기준으로 "
+                             "가져왔어요. 층수 등 동별 세부사항은 실제와 다를 수 있습니다.")
+
+    return None, f"건축물대장 조회 결과 없음 (표제부: {err} / 총괄표제부: {err2})", None
 
 
 def parse_violation(bldg):
