@@ -127,6 +127,8 @@ def get_building_info(j, bldg_key):
             note = (f"⚠️ 같은 지번에 건물 {len(item)}동이 조회됨 — 첫 번째 동 기준 정보입니다. "
                     "위반건축물 여부는 동마다 다를 수 있으니 정확한 동을 지정해 재확인이 필요합니다.")
         item = item[0] if item else None
+    if not item:
+        return None, "건축물대장 응답에 데이터가 없음 (item 없음 — 이 지번은 등록이 안 됐거나 API 응답 형식이 예상과 다름)", note
     return item, None, note
 
 
@@ -535,9 +537,14 @@ def render_guide_body(body, progress, progress_path):
             flush()
             item_text = m.group(2)
             item_key = guide_item_key(item_text)
-            checked = progress.get(item_key, m.group(1).lower() == "x")
-            new_val = st.checkbox(item_text, value=checked, key=f"guide_chk_{item_key}")
-            if new_val != checked:
+            widget_key = f"guide_chk_{item_key}"
+            saved_checked = progress.get(item_key, m.group(1).lower() == "x")
+            # 이미 이번 세션에서 클릭된 적 있으면 session_state의 최신값을 라벨에 반영해
+            # 클릭 즉시(리렌더 지연 없이) 취소선이 붙도록 함
+            current_checked = st.session_state.get(widget_key, saved_checked)
+            label = f"~~{item_text}~~" if current_checked else item_text
+            new_val = st.checkbox(label, value=saved_checked, key=widget_key)
+            if new_val != saved_checked:
                 progress[item_key] = new_val
                 save_guide_progress(progress_path, progress)
         else:
