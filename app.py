@@ -146,7 +146,14 @@ def get_building_info(j, bldg_key):
         return item2, None, ("ℹ️ 개별 동 표제부에서 데이터를 못 찾아 단지 전체 총괄표제부 기준으로 "
                              "가져왔어요. 층수 등 동별 세부사항은 실제와 다를 수 있습니다.")
 
-    return None, f"건축물대장 조회 결과 없음 (표제부: {err} / 총괄표제부: {err2})", None
+    _bun_disp = j["bun"].lstrip("0") or "0"
+    _ji_disp = j["ji"].lstrip("0")
+    _jibun_disp = f"{_bun_disp}-{_ji_disp}" if _ji_disp != "0" and _ji_disp else _bun_disp
+    _mt = "산" if j.get("platGbCd") == "1" else ""
+    return None, (f"건축물대장 조회 결과 없음 (표제부·총괄표제부 둘 다 데이터 없음). "
+                  f"조회에 사용한 지번: {_mt}{_jibun_disp} (법정동코드 {j['bjdongCd']}) — "
+                  f"정부24·세움터에서 이 지번으로 건축물대장이 실제 존재하는지 직접 확인해보세요. "
+                  f"도로명주소 API가 반환한 지번이 실제 등록 지번과 다를 수 있어요."), None
 
 
 def parse_violation(bldg):
@@ -492,6 +499,55 @@ def badge(text, color):
             f"background:{color}1a;padding:3px 9px;border-radius:6px;'>{text}</span>")
 
 
+def calc_affordability(annual_income, existing_monthly_payment, cash,
+                        dsr_limit_pct, ltv_limit_pct, rate_pct, stress_pct, years):
+    """대출한도·매수가능액 계산 (모든 금액 단위: 만원).
+    반환: dict(max_loan, max_price, monthly_payment_real, extra_cost, bottleneck, dsr_loan_limit)"""
+    dsr_annual_limit = max(annual_income * (dsr_limit_pct / 100) - existing_monthly_payment * 12, 0)
+    dsr_monthly_limit = dsr_annual_limit / 12
+    n = max(years, 1) * 12
+    stress_r = max(rate_pct + stress_pct, 0) / 100 / 12
+
+    if stress_r > 0:
+        dsr_loan_limit = dsr_monthly_limit * (1 - (1 + stress_r) ** -n) / stress_r
+    else:
+        dsr_loan_limit = dsr_monthly_limit * n
+
+    ltv_ratio = max(ltv_limit_pct, 0) / 100
+    price_if_dsr = cash + dsr_loan_limit
+    ltv_used_at_dsr_price = (dsr_loan_limit / price_if_dsr) if price_if_dsr > 0 else 0
+
+    if ltv_ratio <= 0 or ltv_used_at_dsr_price <= ltv_ratio:
+        bottleneck = "DSR"
+        max_loan = dsr_loan_limit
+        max_price = price_if_dsr
+    else:
+        bottleneck = "LTV"
+        max_price = cash / (1 - ltv_ratio) if ltv_ratio < 1 else float("inf")
+        max_loan = max_price * ltv_ratio
+
+    real_r = rate_pct / 100 / 12
+    if real_r > 0 and n > 0:
+        monthly_payment_real = max_loan * real_r / (1 - (1 + real_r) ** -n)
+    else:
+        monthly_payment_real = max_loan / n if n else 0
+
+    if max_price <= 60000:
+        acq_tax_rate = 0.011
+    elif max_price <= 90000:
+        acq_tax_rate = 0.02
+    else:
+        acq_tax_rate = 0.03
+    extra_cost = max_price * acq_tax_rate + max_price * 0.005  # 취득세(간이) + 중개보수(중간값 0.5%)
+
+    return {
+        "max_loan": max_loan, "max_price": max_price,
+        "monthly_payment_real": monthly_payment_real,
+        "extra_cost": extra_cost, "bottleneck": bottleneck,
+        "dsr_loan_limit": dsr_loan_limit,
+    }
+
+
 def load_guide_sections(path):
     """마크다운 가이드 파일을 '## ' 헤더 기준으로 섹션 분리.
     반환: [(제목, 본문), ...] 첫 요소는 최상단 인트로(# 제목 + 요약 블록)."""
@@ -700,7 +756,7 @@ if schema:
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
 
-TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트", "📖 매수 가이드"]
+TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트", "📖 매수 가이드", "💰 자금 계산기"]
 if "active_tab" not in st.session_state:
     st.session_state["active_tab"] = TAB_LABELS[0]
 active_tab = st.radio("메뉴", TAB_LABELS, horizontal=True,
@@ -1604,3 +1660,78 @@ elif active_tab == TAB_LABELS[5]:
         st.caption("💾 체크 상태는 이 서버의 `guide_progress.json` 파일에 저장돼요. "
                   "로컬(Windows)에서는 계속 유지되지만, Streamlit Cloud 무료 플랜은 앱이 "
                   "재시작(reboot)되면 초기화될 수 있어요.")
+
+# ════════════════ 탭 6: 자금 계산기 ════════════════
+elif active_tab == TAB_LABELS[6]:
+    st.subheader("💰 자금 계산기")
+    st.caption("DSR·LTV 기준 대출한도·매수가능액을 간이 계산합니다. "
+              "실제 은행 심사 결과와 다를 수 있으니 참고용으로만 써주세요 — 저는 금융 전문가가 아니에요.")
+
+    with st.expander("ℹ️ 계산 방식 및 가정", expanded=False):
+        st.markdown(
+            "- **DSR 한도** = 연소득 × DSR% − 기존 대출 연간 상환액\n"
+            "- 그 한도를 **스트레스금리(입력금리+가산금리) 기준 원리금균등상환**으로 역산해 DSR상 대출한도를 구합니다\n"
+            "- **LTV 한도** = 매수가 × LTV%\n"
+            "- DSR 한도와 LTV 한도 중 **더 낮은 쪽이 실제 한도**가 됩니다 (병목 구간 표시)\n"
+            "- 월 상환액은 스트레스금리가 아닌 **실제 입력 금리** 기준으로 계산\n"
+            "- 부대비용은 취득세(간이 구간별) + 중개보수(0.5% 가정)만 반영한 대략치입니다\n"
+            "- LTV·DSR 규제비율은 지역·무주택여부·생애최초 여부 등에 따라 실제로는 달라요 — "
+            "정확한 값은 은행 사전심사로 확인하세요"
+        )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        in_income = st.number_input("연소득 (만원)", min_value=0, value=3830, step=10)
+        in_existing_pay = st.number_input("기존 대출 월 상환액 (만원)", min_value=0, value=0, step=1,
+                                          help="청년도약대출 등 기존 대출이 있으면 월 상환액을 입력")
+        in_cash = st.number_input("자기자금 (만원, 현금성 자산)", min_value=0, value=0, step=100)
+        in_years = st.number_input("대출기간 (년)", min_value=1, max_value=40, value=30, step=1)
+    with c2:
+        in_dsr = st.slider("DSR 한도 (%)", min_value=10, max_value=70, value=40, step=1)
+        in_ltv = st.slider("LTV 한도 (%)", min_value=10, max_value=90, value=70, step=1,
+                           help="투기과열지구·규제지역 여부에 따라 크게 달라집니다")
+        in_rate = st.number_input("대출금리 (%, 실제)", min_value=0.0, value=4.5, step=0.1)
+        in_stress = st.number_input("스트레스금리 가산 (%p)", min_value=0.0, value=1.5, step=0.1,
+                                    help="스트레스 DSR 단계별로 다름 (2026년 기준 3단계 적용 중)")
+
+    if st.button("🧮 계산하기", type="primary", use_container_width=True):
+        result = calc_affordability(in_income, in_existing_pay, in_cash,
+                                    in_dsr, in_ltv, in_rate, in_stress, in_years)
+        st.session_state["affordability_result"] = result
+
+    result = st.session_state.get("affordability_result")
+    if result:
+        st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+        rc1, rc2 = st.columns(2)
+        rc1.metric("최대 대출 가능액", fmt_eok(result["max_loan"]))
+        rc2.metric("살 수 있는 집 (현금 포함)", fmt_eok(result["max_price"]))
+        rc3, rc4 = st.columns(2)
+        rc3.metric("월 상환액 (실제금리 기준)", f"{result['monthly_payment_real']:,.0f}만원")
+        rc4.metric("취득세·중개보수 등 부대비용", f"{result['extra_cost']:,.0f}만원")
+        st.caption(f"**{result['bottleneck']}**이 한도를 결정했어요 "
+                  f"({'DSR(소득) 기준' if result['bottleneck']=='DSR' else 'LTV(담보비율) 기준'}이 "
+                  f"더 낮아서 그쪽으로 제한됨)")
+
+        st.divider()
+        st.markdown("##### 🏠 이 예산으로 살 수 있는 우리 매물")
+        st.caption("매물 목록의 '매매' 거래 매물 중, 호가가 위에서 계산한 예산 이내인 것만 보여줘요.")
+        try:
+            _rows = load_notion_list(notion_token, db_id)
+            _affordable = [r for r in _rows if r.get("거래방식") == "매매" and r.get("호가")
+                          and r["호가"] <= result["max_price"]]
+            if not _affordable:
+                st.info("이 예산 안에 들어오는 매매 매물이 아직 없어요.")
+            else:
+                _affordable = sorted(_affordable, key=lambda r: r["호가"], reverse=True)
+                for r in _affordable:
+                    st.markdown(
+                        f"<div style='background:#fff;border:1px solid #ececef;border-radius:10px;"
+                        f"padding:10px 14px;margin-bottom:6px;display:flex;justify-content:space-between;'>"
+                        f"<div><b>{r.get('매물명','')}</b><br>"
+                        f"<span style='font-size:12px;color:#9a9aa3;'>{r.get('주소','')}</span></div>"
+                        f"<div style='text-align:right;font-weight:800;'>{fmt_eok(r['호가'])}"
+                        f"<div style='font-size:11px;color:#9a9aa3;font-weight:400;'>"
+                        f"여유 {fmt_eok(result['max_price'] - r['호가'])}</div></div></div>",
+                        unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"매물 목록 조회 실패: {friendly_error(e)}")
