@@ -576,6 +576,128 @@ def guide_item_key(text):
     return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
 
 
+FINANCE_PROFILE_DEFAULT = {
+    "annual_income": 0, "existing_monthly_payment": 0, "cash_actual": 0,
+    "parent_support": 0, "parent_support_type": "미정",
+    "dsr_limit_pct": 40, "ltv_limit_pct": 40, "rate_pct": 4.5, "stress_pct": 1.5, "years": 30,
+    "target_price": 0,
+    "funding_items": {"예적금": 0, "청약저축": 0, "주식매각": 0, "비상금적립분": 0, "부모님": 0, "주택담보대출": 0},
+}
+
+
+def load_finance_profile(path):
+    profile = json.loads(json.dumps(FINANCE_PROFILE_DEFAULT))  # deep copy
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            profile.update({k: v for k, v in loaded.items() if k != "funding_items"})
+            if "funding_items" in loaded:
+                profile["funding_items"].update(loaded["funding_items"])
+        except Exception:
+            pass
+    return profile
+
+
+def save_finance_profile(path, profile):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(profile, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def render_affordability_editor(profile_path):
+    """'내 구매력 현황' 편집 위젯. 저장된 재정 프로필을 읽고 수정 가능하게 하며,
+    calc_affordability()로 대출한도·매수가능가를 실시간 계산해 보여준다."""
+    profile = load_finance_profile(profile_path)
+    with st.form("afford_profile_form"):
+        f1, f2 = st.columns(2)
+        with f1:
+            cash = st.number_input("자기자금 (실질, 만원)", min_value=0,
+                                   value=int(profile["cash_actual"]), step=100)
+            parent = st.number_input("부모님 지원금 (만원)", min_value=0,
+                                     value=int(profile["parent_support"]), step=100)
+            parent_type = st.selectbox("성격", ["미정", "차용", "증여"],
+                index=["미정", "차용", "증여"].index(profile.get("parent_support_type", "미정")))
+        with f2:
+            income = st.number_input("연소득 (만원)", min_value=0,
+                                     value=int(profile["annual_income"]), step=10)
+            existing = st.number_input("기존 대출 월 상환액 (만원)", min_value=0,
+                                       value=int(profile["existing_monthly_payment"]), step=1)
+            target = st.number_input("비교할 목표 매매가 (만원)", min_value=0,
+                                     value=int(profile.get("target_price", 0)), step=1000,
+                                     help="예: 문정동 궁리치웰 25평 실거래가 등")
+        f3, f4 = st.columns(2)
+        with f3:
+            dsr = st.slider("DSR 한도 (%)", 10, 70, int(profile["dsr_limit_pct"]), key="afford_dsr")
+            rate = st.number_input("대출금리 (%)", min_value=0.0,
+                                   value=float(profile["rate_pct"]), step=0.1)
+        with f4:
+            ltv = st.slider("LTV 한도 (%)", 10, 90, int(profile["ltv_limit_pct"]), key="afford_ltv",
+                           help="서울 등 투기과열지구 일반 무주택자는 40%, 생애최초 구매자는 "
+                                "최대 80%까지 완화돼요 (2026년 기준). 본인 조건에 맞게 조정하세요.")
+            stress = st.number_input("스트레스금리 가산 (%p)", min_value=0.0,
+                                     value=float(profile["stress_pct"]), step=0.1)
+        if st.form_submit_button("💾 저장", type="primary"):
+            profile.update({
+                "cash_actual": cash, "parent_support": parent, "parent_support_type": parent_type,
+                "annual_income": income, "existing_monthly_payment": existing, "target_price": target,
+                "dsr_limit_pct": dsr, "ltv_limit_pct": ltv, "rate_pct": rate, "stress_pct": stress,
+            })
+            save_finance_profile(profile_path, profile)
+            st.success("✅ 저장 완료! 자금 계산기·현실적 로드맵에도 바로 반영돼요.")
+            st.rerun()
+
+    result_incl = calc_affordability(profile["annual_income"], profile["existing_monthly_payment"],
+                                     profile["cash_actual"] + profile["parent_support"],
+                                     profile["dsr_limit_pct"], profile["ltv_limit_pct"],
+                                     profile["rate_pct"], profile["stress_pct"], profile["years"])
+    result_excl = calc_affordability(profile["annual_income"], profile["existing_monthly_payment"],
+                                     profile["cash_actual"],
+                                     profile["dsr_limit_pct"], profile["ltv_limit_pct"],
+                                     profile["rate_pct"], profile["stress_pct"], profile["years"])
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    g1, g2, g3 = st.columns(3)
+    g1.metric("대출 가능 한도", fmt_eok(result_incl["max_loan"]))
+    g2.metric("이론상 최대 매수 가능가", fmt_eok(result_incl["max_price"]))
+    g3.metric("부모님 자금 제외 시", fmt_eok(result_excl["max_price"]))
+    if profile.get("target_price"):
+        gap = profile["target_price"] - result_incl["max_price"]
+        if gap > 0:
+            st.warning(f"⚠️ 목표 매매가 {fmt_eok(profile['target_price'])} 기준, 자기자금 약 "
+                      f"{fmt_eok(gap)} 더 필요해요.")
+        else:
+            st.success(f"✅ 목표 매매가 {fmt_eok(profile['target_price'])} 이내로 구매 가능한 수준이에요.")
+    return profile
+
+
+def render_funding_plan_editor(profile_path):
+    """'자금조달계획서 — 내 경우' 편집 위젯. 항목별 금액을 입력받아 합계·목표가 대비 갭을 보여준다."""
+    profile = load_finance_profile(profile_path)
+    labels = ["예적금", "청약저축", "주식매각", "비상금적립분", "부모님", "주택담보대출"]
+    items = profile.get("funding_items", {})
+    with st.form("funding_plan_form"):
+        vals = {}
+        cols = st.columns(3)
+        for i, lb in enumerate(labels):
+            with cols[i % 3]:
+                vals[lb] = st.number_input(f"{lb} (만원)", min_value=0,
+                                           value=int(items.get(lb, 0)), step=100, key=f"fund_{lb}")
+        if st.form_submit_button("💾 저장", type="primary"):
+            profile["funding_items"] = vals
+            save_finance_profile(profile_path, profile)
+            st.success("✅ 저장 완료!")
+            st.rerun()
+
+    total = sum(items.get(lb, 0) for lb in labels)
+    st.metric("자금조달 합계", fmt_eok(total))
+    if profile.get("target_price"):
+        gap = profile["target_price"] - total
+        st.caption(f"목표 매매가 대비 {'약 ' + fmt_eok(gap) + ' 부족' if gap > 0 else fmt_eok(-gap) + ' 여유'}"
+                  f" (목표가는 '내 구매력 현황'에서 수정)")
+
+
 def load_guide_progress(path):
     if not os.path.exists(path):
         return {}
@@ -1650,12 +1772,41 @@ elif active_tab == TAB_LABELS[5]:
         if _total_items:
             st.caption(f"✅ 체크리스트 진행률: {min(_done_items, _total_items)}/{_total_items}")
 
+        _finance_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "financial_profile.json")
+
         _intro_title, _intro_body = _sections[0]
         st.markdown(f"## {_intro_title}")
         render_guide_body(_intro_body, _progress, _progress_path)
         for _title, _body in _sections[1:]:
-            with st.expander(_title, expanded=False):
-                render_guide_body(_body, _progress, _progress_path)
+            if _title == "내 구매력 현황":
+                with st.expander(f"📊 {_title} (실시간 — 여기서 수정하면 아래 로드맵·자금 계산기에도 반영)",
+                                 expanded=True):
+                    render_affordability_editor(_finance_path)
+            elif _title == "자금조달계획서 — 내 경우":
+                with st.expander(_title, expanded=False):
+                    render_funding_plan_editor(_finance_path)
+                    with st.expander("원본 안내 텍스트 (증여/차용 신고 방법 등)", expanded=False):
+                        render_guide_body(_body, _progress, _progress_path)
+            elif _title == "현실적 로드맵":
+                _fp = load_finance_profile(_finance_path)
+                _res = calc_affordability(_fp["annual_income"], _fp["existing_monthly_payment"],
+                                          _fp["cash_actual"] + _fp["parent_support"],
+                                          _fp["dsr_limit_pct"], _fp["ltv_limit_pct"],
+                                          _fp["rate_pct"], _fp["stress_pct"], _fp["years"])
+                with st.expander(_title, expanded=False):
+                    if _fp.get("target_price"):
+                        _gap = _fp["target_price"] - _res["max_price"]
+                        if _gap > 0:
+                            st.info(f"📌 현재 재정 기준, 목표 매매가까지 자기자금 약 {fmt_eok(_gap)} "
+                                   f"더 필요한 상태예요. ('내 구매력 현황'에서 최신 수정)")
+                        else:
+                            st.success("📌 현재 재정 기준, 목표 매매가 이내로 구매 가능한 상태예요.")
+                    else:
+                        st.caption("💡 '내 구매력 현황'에서 목표 매매가를 입력하면 여기 갭이 표시돼요.")
+                    render_guide_body(_body, _progress, _progress_path)
+            else:
+                with st.expander(_title, expanded=False):
+                    render_guide_body(_body, _progress, _progress_path)
 
         st.caption("💾 체크 상태는 이 서버의 `guide_progress.json` 파일에 저장돼요. "
                   "로컬(Windows)에서는 계속 유지되지만, Streamlit Cloud 무료 플랜은 앱이 "
@@ -1667,37 +1818,57 @@ elif active_tab == TAB_LABELS[6]:
     st.caption("DSR·LTV 기준 대출한도·매수가능액을 간이 계산합니다. "
               "실제 은행 심사 결과와 다를 수 있으니 참고용으로만 써주세요 — 저는 금융 전문가가 아니에요.")
 
-    with st.expander("ℹ️ 계산 방식 및 가정", expanded=False):
+    with st.expander("ℹ️ 계산 방식 및 가정 (2026년 기준)", expanded=False):
         st.markdown(
-            "- **DSR 한도** = 연소득 × DSR% − 기존 대출 연간 상환액\n"
+            "- **DSR 한도** = 연소득 × DSR% − 기존 대출 연간 상환액 (1금융권 상한 **40%**가 기본값)\n"
             "- 그 한도를 **스트레스금리(입력금리+가산금리) 기준 원리금균등상환**으로 역산해 DSR상 대출한도를 구합니다\n"
-            "- **LTV 한도** = 매수가 × LTV%\n"
+            "- 기본 스트레스 가산금리 **1.5%p**는 2025.7 시행된 스트레스 DSR 3단계, 서울·경기·인천(수도권) "
+            "변동금리 주담대 기준 (금융위원회 발표)\n"
+            "- **LTV 한도** = 매수가 × LTV%. 기본값 **40%**는 서울 등 투기과열지구 **일반 무주택자** 기준이고, "
+            "**생애최초 구매자는 최대 80%**까지 완화돼요 — 본인이 생애최초에 해당하면 슬라이더를 올려서 재계산하세요\n"
             "- DSR 한도와 LTV 한도 중 **더 낮은 쪽이 실제 한도**가 됩니다 (병목 구간 표시)\n"
             "- 월 상환액은 스트레스금리가 아닌 **실제 입력 금리** 기준으로 계산\n"
             "- 부대비용은 취득세(간이 구간별) + 중개보수(0.5% 가정)만 반영한 대략치입니다\n"
-            "- LTV·DSR 규제비율은 지역·무주택여부·생애최초 여부 등에 따라 실제로는 달라요 — "
-            "정확한 값은 은행 사전심사로 확인하세요"
+            "- ⚠️ 규제지역 지정 여부·본인의 생애최초/신혼/다자녀 특례 해당 여부는 수시로 바뀌고 개별 심사에 따라 "
+            "달라져요 — 이 계산기는 참고용이고, 정확한 값은 반드시 **은행 사전심사**로 확인하세요"
         )
+
+    _fin_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "financial_profile.json")
+    _fp = load_finance_profile(_fin_path)
+    st.caption("💡 연소득·DSR·LTV·금리 등은 '매수 가이드 → 내 구매력 현황'과 같은 값을 공유해요. "
+              "(자기자금/부모님 지원금 분리 입력은 그쪽에서 별도로 관리돼요)")
 
     c1, c2 = st.columns(2)
     with c1:
-        in_income = st.number_input("연소득 (만원)", min_value=0, value=3830, step=10)
-        in_existing_pay = st.number_input("기존 대출 월 상환액 (만원)", min_value=0, value=0, step=1,
+        in_income = st.number_input("연소득 (만원)", min_value=0, value=int(_fp["annual_income"]), step=10)
+        in_existing_pay = st.number_input("기존 대출 월 상환액 (만원)", min_value=0,
+                                          value=int(_fp["existing_monthly_payment"]), step=1,
                                           help="청년도약대출 등 기존 대출이 있으면 월 상환액을 입력")
-        in_cash = st.number_input("자기자금 (만원, 현금성 자산)", min_value=0, value=0, step=100)
-        in_years = st.number_input("대출기간 (년)", min_value=1, max_value=40, value=30, step=1)
+        in_cash = st.number_input("자기자금 (만원, 현금성 자산)", min_value=0,
+                                  value=int(_fp["cash_actual"] + _fp["parent_support"]), step=100,
+                                  help="부모님 지원금 포함 여부는 '내 구매력 현황'에서 세부 조정 가능")
+        in_years = st.number_input("대출기간 (년)", min_value=1, max_value=40, value=int(_fp["years"]), step=1)
     with c2:
-        in_dsr = st.slider("DSR 한도 (%)", min_value=10, max_value=70, value=40, step=1)
-        in_ltv = st.slider("LTV 한도 (%)", min_value=10, max_value=90, value=70, step=1,
-                           help="투기과열지구·규제지역 여부에 따라 크게 달라집니다")
-        in_rate = st.number_input("대출금리 (%, 실제)", min_value=0.0, value=4.5, step=0.1)
-        in_stress = st.number_input("스트레스금리 가산 (%p)", min_value=0.0, value=1.5, step=0.1,
+        in_dsr = st.slider("DSR 한도 (%)", min_value=10, max_value=70, value=int(_fp["dsr_limit_pct"]), step=1)
+        in_ltv = st.slider("LTV 한도 (%)", min_value=10, max_value=90, value=int(_fp["ltv_limit_pct"]), step=1,
+                           help="서울 등 투기과열지구 일반 무주택자는 40%, 생애최초 구매자는 "
+                                "최대 80%까지 완화돼요 (2026년 기준). 본인 조건에 맞게 조정하세요.")
+        in_rate = st.number_input("대출금리 (%, 실제)", min_value=0.0, value=float(_fp["rate_pct"]), step=0.1)
+        in_stress = st.number_input("스트레스금리 가산 (%p)", min_value=0.0, value=float(_fp["stress_pct"]), step=0.1,
                                     help="스트레스 DSR 단계별로 다름 (2026년 기준 3단계 적용 중)")
 
     if st.button("🧮 계산하기", type="primary", use_container_width=True):
         result = calc_affordability(in_income, in_existing_pay, in_cash,
                                     in_dsr, in_ltv, in_rate, in_stress, in_years)
         st.session_state["affordability_result"] = result
+        # 자기자금/부모님지원금은 '내 구매력 현황'에서 별도로 나눠 관리하므로 여기서는 덮어쓰지 않음
+        # (그 외 공통 가정값만 프로필에 반영)
+        _fp.update({
+            "annual_income": in_income, "existing_monthly_payment": in_existing_pay,
+            "dsr_limit_pct": in_dsr, "ltv_limit_pct": in_ltv,
+            "rate_pct": in_rate, "stress_pct": in_stress, "years": in_years,
+        })
+        save_finance_profile(_fin_path, _fp)
 
     result = st.session_state.get("affordability_result")
     if result:
