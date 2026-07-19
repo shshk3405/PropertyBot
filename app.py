@@ -580,7 +580,7 @@ FINANCE_PROFILE_DEFAULT = {
     "annual_income": 0, "existing_monthly_payment": 0, "cash_actual": 0,
     "parent_support": 0, "parent_support_type": "미정",
     "dsr_limit_pct": 40, "ltv_limit_pct": 40, "rate_pct": 4.5, "stress_pct": 1.5, "years": 30,
-    "target_price": 0,
+    "target_price": 0, "monthly_saving": 0, "sub_target_date": "2027-07-01",
     "funding_items": {"예적금": 0, "청약저축": 0, "주식매각": 0, "비상금적립분": 0, "부모님": 0, "주택담보대출": 0},
 }
 
@@ -878,7 +878,7 @@ if schema:
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
 
-TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "🗓️ 임장 체크리스트", "📖 매수 가이드", "💰 자금 계산기"]
+TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "📖 매수 가이드", "💰 자금 계산기"]
 if "active_tab" not in st.session_state:
     st.session_state["active_tab"] = TAB_LABELS[0]
 active_tab = st.radio("메뉴", TAB_LABELS, horizontal=True,
@@ -887,6 +887,32 @@ active_tab = st.radio("메뉴", TAB_LABELS, horizontal=True,
 # ════════════════ 탭 0: 대시보드 ════════════════
 if active_tab == TAB_LABELS[0]:
     st.subheader("대시보드")
+
+    _fin_path_dash = os.path.join(os.path.dirname(os.path.abspath(__file__)), "financial_profile.json")
+    _fp_dash = load_finance_profile(_fin_path_dash)
+    try:
+        _target_d = datetime.fromisoformat(_fp_dash["sub_target_date"]).date()
+    except Exception:
+        _target_d = date(2027, 7, 1)
+    _dday = (_target_d - date.today()).days
+    _dday_txt = f"D-{_dday}" if _dday > 0 else ("D-Day" if _dday == 0 else f"D+{-_dday}")
+    _dc1, _dc2 = st.columns([5, 1])
+    with _dc1:
+        st.markdown(
+            f"<div style='background:linear-gradient(135deg,{ACCENT},#5b7ce0);color:#fff;"
+            f"border-radius:13px;padding:16px 22px;margin-bottom:12px;'>"
+            f"<div style='font-size:12px;font-weight:700;opacity:.85;'>🎯 청약 1순위 목표일 "
+            f"({_target_d.isoformat()})</div>"
+            f"<div style='font-size:22px;font-weight:800;margin-top:4px;'>{_dday_txt}</div></div>",
+            unsafe_allow_html=True)
+    with _dc2:
+        with st.popover("✏️ 날짜 수정", use_container_width=True):
+            _new_d = st.date_input("목표일", value=_target_d, format="YYYY-MM-DD", key="dday_edit")
+            if st.button("저장", key="dday_save"):
+                _fp_dash["sub_target_date"] = _new_d.isoformat()
+                save_finance_profile(_fin_path_dash, _fp_dash)
+                st.rerun()
+
     try:
         rows = load_notion_list(notion_token, db_id)
     except Exception as e:
@@ -1166,6 +1192,15 @@ elif active_tab == TAB_LABELS[2]:
     if not rows:
         st.info("저장된 매물이 없어요.")
     else:
+        _plan = [r for r in rows if r.get("상태") == "방문예정"]
+        if _plan:
+            _names = "  →  ".join(r["매물명"] for r in _plan)
+            st.markdown(
+                f"<div style='background:{ACCENT};color:#fff;border-radius:13px;padding:14px 20px;margin-bottom:12px;'>"
+                f"<div style='font-size:12px;font-weight:700;opacity:.85;'>오늘의 임장 루트 · 방문예정 {len(_plan)}건</div>"
+                f"<div style='font-size:15px;font-weight:800;margin-top:4px;'>{_names}</div></div>",
+                unsafe_allow_html=True)
+
         for r in rows:
             r["_gap"] = compute_gap(r)
 
@@ -1339,6 +1374,12 @@ elif active_tab == TAB_LABELS[2]:
                         new_rating = st.slider("평점", 0.0, 5.0, float(sel.get("평점") or 0.0), 0.5)
                     with ec3:
                         new_fav = st.checkbox("⭐ 관심", value=bool(sel.get("관심")))
+                    try:
+                        _cur_visit = datetime.fromisoformat(sel["방문일"]).date() if sel.get("방문일") else None
+                    except Exception:
+                        _cur_visit = None
+                    new_visit_date = st.date_input("방문일", value=_cur_visit, format="YYYY-MM-DD")
+                    new_checks = st.multiselect("현장 체크", CHECK_ITEMS, default=sel.get("임장체크") or [])
                     new_memo = st.text_area("메모", value=sel.get("메모") or "",
                                             placeholder="채광·소음·주차·관리상태·주변 환경 등 현장 인상")
                     if st.form_submit_button("💾 변경사항 저장", type="primary"):
@@ -1346,6 +1387,8 @@ elif active_tab == TAB_LABELS[2]:
                             "상태": {"select": {"name": new_status}},
                             "평점": {"number": float(new_rating)},
                             "관심": {"checkbox": bool(new_fav)},
+                            "방문일": {"date": {"start": new_visit_date.isoformat()} if new_visit_date else None},
+                            "임장체크": {"multi_select": [{"name": c} for c in new_checks]},
                             "메모": {"rich_text": [{"text": {"content": new_memo}}]},
                         }
                         props = filter_props(props, schema)
@@ -1657,77 +1700,7 @@ map.on('contextmenu',function(){if(dm)tD()});
         st.caption(f"총 {len(map_rows)}개 매물 표시됨")
 
 
-# ════════════════ 탭 4: 임장 체크리스트 ════════════════
 elif active_tab == TAB_LABELS[4]:
-    st.subheader("임장 체크리스트")
-    st.caption("방문 상태·평점·현장 체크·메모를 매물별로 기록하세요.")
-
-    missing = [c for c in ["상태", "평점", "방문일", "메모", "임장체크"] if c not in schema]
-    if missing:
-        st.info("노션 DB에 다음 속성을 추가하면 모두 저장됩니다 → "
-                + " · ".join(f"`{m}`" for m in missing)
-                + "\n\n(상태=선택, 평점=숫자, 방문일=날짜, 메모=텍스트, 임장체크=다중선택)")
-
-    try:
-        rows = load_notion_list(notion_token, db_id)
-    except Exception as e:
-        rows = []
-        st.error(f"데이터 로드 실패: {friendly_error(e)}")
-
-    if not rows:
-        st.info("저장된 매물이 없어요.")
-    else:
-        plan = [r for r in rows if r.get("상태") == "방문예정"]
-        if plan:
-            names = "  →  ".join(r["매물명"] for r in plan)
-            st.markdown(
-                f"<div style='background:{ACCENT};color:#fff;border-radius:13px;padding:16px 22px;margin-bottom:14px;'>"
-                f"<div style='font-size:12px;font-weight:700;opacity:.85;'>오늘의 임장 루트 · 방문예정 {len(plan)}건</div>"
-                f"<div style='font-size:16px;font-weight:800;margin-top:5px;'>{names}</div></div>",
-                unsafe_allow_html=True)
-
-        for r in rows:
-            sc = STATUS_COLORS.get(r.get("상태"), "#8a8a93")
-            head = f"{r['매물명']}  ·  {r.get('주소','')}  ·  {r.get('상태') or '검토중'}"
-            with st.expander(head, expanded=False):
-                with st.form(key="chk_" + r["page_id"]):
-                    fc1, fc2, fc3 = st.columns([1, 1, 1])
-                    with fc1:
-                        cur = r.get("상태") or "검토중"
-                        status = st.selectbox("상태", STATUS_OPTIONS,
-                                              index=STATUS_OPTIONS.index(cur) if cur in STATUS_OPTIONS else 0)
-                    with fc2:
-                        rating = st.slider("평점", 0.0, 5.0, float(r.get("평점") or 0.0), 0.5)
-                    with fc3:
-                        try:
-                            dval = datetime.fromisoformat(r["방문일"]).date() if r.get("방문일") else date.today()
-                        except Exception:
-                            dval = date.today()
-                        visit_date = st.date_input("방문일", value=dval)
-                    checks = st.multiselect("현장 체크", CHECK_ITEMS, default=r.get("임장체크") or [])
-                    memo = st.text_area("메모", value=r.get("메모") or "",
-                                        placeholder="채광·소음·주차·관리상태·주변 환경 등 현장 인상을 남겨두세요.")
-                    if st.form_submit_button("💾 저장", type="primary"):
-                        props = {
-                            "상태": {"select": {"name": status}},
-                            "평점": {"number": float(rating)},
-                            "방문일": {"date": {"start": visit_date.isoformat()}},
-                            "메모": {"rich_text": [{"text": {"content": memo}}]},
-                            "임장체크": {"multi_select": [{"name": c} for c in checks]},
-                        }
-                        props = filter_props(props, schema)
-                        if not props:
-                            st.warning("저장 가능한 속성이 없어요. 위 안내의 노션 컬럼을 먼저 추가해주세요.")
-                        else:
-                            try:
-                                update_notion_page(notion_token, r["page_id"], props)
-                                st.success("✅ 저장 완료!")
-                                st.cache_data.clear()
-                            except Exception as e:
-                                st.error(f"저장 실패: {friendly_error(e)}")
-
-# ════════════════ 탭 5: 매수 가이드 (개인용) ════════════════
-elif active_tab == TAB_LABELS[5]:
     st.subheader("📖 매수 가이드")
     st.caption("나만 보는 개인 재정·매매 절차 메모입니다. (민감한 금액 정보가 포함되어 있어요)")
 
@@ -1813,7 +1786,7 @@ elif active_tab == TAB_LABELS[5]:
                   "재시작(reboot)되면 초기화될 수 있어요.")
 
 # ════════════════ 탭 6: 자금 계산기 ════════════════
-elif active_tab == TAB_LABELS[6]:
+elif active_tab == TAB_LABELS[5]:
     st.subheader("💰 자금 계산기")
     st.caption("DSR·LTV 기준 대출한도·매수가능액을 간이 계산합니다. "
               "실제 은행 심사 결과와 다를 수 있으니 참고용으로만 써주세요 — 저는 금융 전문가가 아니에요.")
@@ -1882,6 +1855,34 @@ elif active_tab == TAB_LABELS[6]:
         st.caption(f"**{result['bottleneck']}**이 한도를 결정했어요 "
                   f"({'DSR(소득) 기준' if result['bottleneck']=='DSR' else 'LTV(담보비율) 기준'}이 "
                   f"더 낮아서 그쪽으로 제한됨)")
+
+        st.divider()
+        st.markdown("##### 📈 자금 축적 시뮬레이터")
+        st.caption("지금 속도로 저축하면 목표 매매가에 언제쯤 도달하는지 계산해요.")
+        _fp2 = load_finance_profile(_fin_path)
+        _sim_saving = st.number_input("월 저축액 (만원)", min_value=0,
+                                      value=int(_fp2.get("monthly_saving", 0)), step=5,
+                                      key="sim_saving_input")
+        if _sim_saving != _fp2.get("monthly_saving", 0):
+            _fp2["monthly_saving"] = _sim_saving
+            save_finance_profile(_fin_path, _fp2)
+
+        _target_for_sim = _fp2.get("target_price", 0)
+        if not _target_for_sim:
+            st.caption("💡 '매수 가이드 → 내 구매력 현황'에서 목표 매매가를 입력하면 도달 시점을 계산해줘요.")
+        elif _sim_saving <= 0:
+            st.caption("월 저축액을 입력하면 도달 시점을 계산해줘요.")
+        else:
+            _gap_now = _target_for_sim - result["max_price"]
+            if _gap_now <= 0:
+                st.success(f"✅ 이미 목표 매매가 {fmt_eok(_target_for_sim)}를 감당할 수 있는 수준이에요.")
+            else:
+                # 자기자금이 월 _sim_saving만큼 늘면 max_price도 대략 그만큼(레버리지 없이) 늘어난다고 가정한 단순 근사
+                _months_needed = -(-int(_gap_now) // int(_sim_saving))  # 올림 나눗셈
+                _reach_date = date.today() + pd.Timedelta(days=_months_needed * 30)
+                st.info(f"현재 갭 {fmt_eok(_gap_now)} ÷ 월 {_sim_saving}만원 저축 "
+                       f"≈ **약 {_months_needed}개월 후** (약 {_reach_date.strftime('%Y년 %m월')}경) 도달 예상")
+                st.caption("⚠️ 단순 근사치예요 — 대출한도·집값 변동, 이자 수익 등은 반영 안 했습니다.")
 
         st.divider()
         st.markdown("##### 🏠 이 예산으로 살 수 있는 우리 매물")
