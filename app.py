@@ -425,42 +425,49 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
 
 
 def load_notion_list(notion_token, db_id):
-    """노션 DB 매물 목록 조회 (직접 HTTP)"""
-    resp = SESSION.post(
-        f"https://api.notion.com/v1/databases/{db_id}/query",
-        headers={"Authorization": f"Bearer {notion_token}",
-                 "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
-        json={"sorts": [{"timestamp": "created_time", "direction": "descending"}]},
-        timeout=30)
+    """노션 DB 매물 목록 조회 (직접 HTTP).
+    노션 API는 한 번에 최대 100건만 반환하므로, has_more가 true인 동안
+    start_cursor를 이어받아 반복 호출한다."""
     rows = []
-    for p in resp.json().get("results", []):
-        pr = p["properties"]
-        def txt(k):
-            prop = pr.get(k, {})
-            items = prop.get("title") or prop.get("rich_text") or []
-            return items[0]["plain_text"] if items else ""
-        def num(k): return pr.get(k, {}).get("number")
-        def sel(k):
-            s = pr.get(k, {}).get("select"); return s["name"] if s else ""
-        def chk(k): return pr.get(k, {}).get("checkbox", False)
-        def dt(k):
-            d = pr.get(k, {}).get("date"); return d["start"] if d else ""
-        def msel(k): return [o["name"] for o in pr.get(k, {}).get("multi_select", [])]
-        rows.append({
-            "매물명": txt("매물명"), "주소": txt("주소"),
-            "거래방식": sel("거래방식"), "호가": num("호가(만원)"), "월세": num("월세"),
-            "매물유형": sel("매물유형"), "준공년도": num("준공년도"),
-            "최고층수": num("최고층수"), "평당가(원)": num("최근 거래 평당가(원)"),
-            "비교기준": txt("비교 기준"), "전용면적(평)": num("전용면적(평)"),
-            "상태": sel("상태"), "관심": chk("관심"), "평점": num("평점"),
-            "메모": txt("메모"), "방문일": dt("방문일"), "임장체크": msel("임장체크"),
-            "위도": num("위도"), "경도": num("경도"),
-            "방향": txt("방향"), "관리비(만원)": num("관리비(만원)"),
-            "입주가능일": dt("입주가능일"), "총주차대수": num("총주차대수"),
-            "세대당주차대수": num("세대당주차대수"),
-            "방수욕실수": txt("방수욕실수"), "특징메모": txt("특징메모"),
-            "page_id": p["id"],
-        })
+    _headers = {"Authorization": f"Bearer {notion_token}",
+                "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+    _body = {"sorts": [{"timestamp": "created_time", "direction": "descending"}], "page_size": 100}
+    while True:
+        resp = SESSION.post(
+            f"https://api.notion.com/v1/databases/{db_id}/query",
+            headers=_headers, json=_body, timeout=30)
+        data = resp.json()
+        for p in data.get("results", []):
+            pr = p["properties"]
+            def txt(k):
+                prop = pr.get(k, {})
+                items = prop.get("title") or prop.get("rich_text") or []
+                return items[0]["plain_text"] if items else ""
+            def num(k): return pr.get(k, {}).get("number")
+            def sel(k):
+                s = pr.get(k, {}).get("select"); return s["name"] if s else ""
+            def chk(k): return pr.get(k, {}).get("checkbox", False)
+            def dt(k):
+                d = pr.get(k, {}).get("date"); return d["start"] if d else ""
+            def msel(k): return [o["name"] for o in pr.get(k, {}).get("multi_select", [])]
+            rows.append({
+                "매물명": txt("매물명"), "주소": txt("주소"),
+                "거래방식": sel("거래방식"), "호가": num("호가(만원)"), "월세": num("월세"),
+                "매물유형": sel("매물유형"), "준공년도": num("준공년도"),
+                "최고층수": num("최고층수"), "평당가(원)": num("최근 거래 평당가(원)"),
+                "비교기준": txt("비교 기준"), "전용면적(평)": num("전용면적(평)"),
+                "상태": sel("상태"), "관심": chk("관심"), "평점": num("평점"),
+                "메모": txt("메모"), "방문일": dt("방문일"), "임장체크": msel("임장체크"),
+                "위도": num("위도"), "경도": num("경도"),
+                "방향": txt("방향"), "관리비(만원)": num("관리비(만원)"),
+                "입주가능일": dt("입주가능일"), "총주차대수": num("총주차대수"),
+                "세대당주차대수": num("세대당주차대수"),
+                "방수욕실수": txt("방수욕실수"), "특징메모": txt("특징메모"),
+                "page_id": p["id"],
+            })
+        if not data.get("has_more"):
+            break
+        _body["start_cursor"] = data["next_cursor"]
     return rows
 
 
