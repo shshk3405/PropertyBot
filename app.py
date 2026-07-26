@@ -1211,6 +1211,38 @@ elif active_tab == TAB_LABELS[2]:
         for r in rows:
             r["_gap"] = compute_gap(r)
 
+        # ── 관심 매물 비교 모드 ──
+        _favs = [r for r in rows if r.get("관심")]
+        if len(_favs) >= 2:
+            with st.expander(f"⚖️ 관심 매물 비교 ({len(_favs)}건)", expanded=False):
+                _cmp_rows = []
+                for r in _favs:
+                    _hoga_py = int(r["호가"] * 10000 / r["전용면적(평)"]) if (r.get("호가") and r.get("전용면적(평)")) else None
+                    _park_total, _park_unit = r.get("총주차대수"), r.get("세대당주차대수")
+                    if _park_total and _park_unit:
+                        _park = f"{int(_park_total)}대({int(_park_unit)})"
+                    elif _park_total:
+                        _park = f"{int(_park_total)}대"
+                    else:
+                        _park = "—"
+                    _cmp_rows.append({
+                        "매물명": r.get("매물명", ""),
+                        "거래": r.get("거래방식", "—"),
+                        "호가": fmt_eok(r.get("호가")),
+                        "평당가": fmt_eok_won(_hoga_py),
+                        "시세갭": f"{r['_gap']:+.1f}%" if r["_gap"] is not None else "—",
+                        "전용면적": f"{r['전용면적(평)']:.1f}평" if r.get("전용면적(평)") else "—",
+                        "준공": f"{int(r['준공년도'])}년" if r.get("준공년도") else "—",
+                        "방향": r.get("방향") or "—",
+                        "관리비": f"{int(r['관리비(만원)']):,}만" if r.get("관리비(만원)") else "—",
+                        "방/욕실": r.get("방수욕실수") or "—",
+                        "주차": _park,
+                        "평점": f"{r['평점']:.1f}" if r.get("평점") else "—",
+                    })
+                _cmp_df = pd.DataFrame(_cmp_rows).set_index("매물명")
+                st.dataframe(_cmp_df, use_container_width=True, height=min(56 + len(_favs) * 38, 400))
+                st.caption("💡 관심(⭐) 표시한 매물만 나와요. 매물 상세에서 ⭐ 체크를 켜고 저장하면 여기에 추가됩니다.")
+
         left, right = st.columns([1, 1.9], gap="medium")
 
         # ── 왼쪽(마스터): 필터 + 매물 리스트 ──
@@ -1223,8 +1255,12 @@ elif active_tab == TAB_LABELS[2]:
                 sort_option = st.selectbox(
                     "정렬", ["시세갭 높은순", "최신순", "호가 낮은순", "호가 높은순", "평당가 낮은순"],
                     label_visibility="collapsed")
+            fav_count = sum(1 for r in rows if r.get("관심"))
+            fav_only = st.toggle(f"⭐ 관심 매물만 ({fav_count}건)", value=False, key="fav_filter")
 
             filtered = rows if deal_filter == "전체" else [r for r in rows if r.get("거래방식") == deal_filter]
+            if fav_only:
+                filtered = [r for r in filtered if r.get("관심")]
             if sort_option == "시세갭 높은순":
                 filtered = sorted(filtered, key=lambda r: r["_gap"] if r["_gap"] is not None else -1e9, reverse=True)
             elif sort_option == "호가 낮은순":
@@ -1631,9 +1667,13 @@ elif active_tab == TAB_LABELS[3]:
             {
                 "name": r["매물명"], "addr": r.get("주소", ""),
                 "deal": r.get("거래방식", ""), "mtype": r.get("매물유형", ""),
-                "price": r.get("호가"), "avgPrice": r.get("평당가(원)"),
+                "price": r.get("호가"), "rent": r.get("월세"),
+                "avgPrice": r.get("평당가(원)"),
                 "year": r.get("준공년도"), "floors": r.get("최고층수"),
                 "gap": compute_gap(r),
+                "dir": r.get("방향") or "", "mgmt": r.get("관리비(만원)"),
+                "rb": r.get("방수욕실수") or "", "fav": bool(r.get("관심")),
+                "status": r.get("상태") or "",
                 "lat": r["lat"], "lng": r["lng"],
             }
             for r in map_rows
@@ -1687,10 +1727,10 @@ var map=L.map('map',{zoomControl:false}).setView([__LAT__,__LNG__],15);
 L.control.zoom({position:'bottomright'}).addTo(map);
 L.tileLayer('__TILE__',{attribution:'© OpenStreetMap',maxZoom:19}).addTo(map);
 function mI(c){var s='<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40"><path d="M14 0C6.3 0 0 6.3 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.3 21.7 0 14 0z" fill="'+c+'"/><circle cx="14" cy="14" r="6" fill="white"/></svg>';return L.divIcon({html:s,className:'',iconSize:[28,40],iconAnchor:[14,40],popupAnchor:[0,-40]});}
-function pH(d){var h=d.price?d.price.toLocaleString()+'만원':'-';var a=d.avgPrice?d.avgPrice.toLocaleString()+'원/평':'-';var b=(d.year&&d.floors)?'🏗️ '+Math.floor(d.year)+'년/'+Math.floor(d.floors)+'층<br>':'';var g=(d.gap!=null)?'<span style="color:'+(d.gap>0?'#1f9d57':'#e5484d')+';font-weight:bold">📊 '+(d.gap>0?'+':'')+d.gap.toFixed(1)+'%</span>':'';return '<div style="font-family:Pretendard,sans-serif;font-size:13px;min-width:180px;line-height:1.6"><b style="font-size:15px">'+d.name+'</b><hr style="margin:4px 0;border:none;border-top:1px solid #eee">📍 '+d.addr+'<br>🏷️ '+(d.deal||'-')+' · '+(d.mtype||'-')+'<br>💰 '+h+'<br>📊 '+a+'<br>'+b+g+'</div>';}
+function pH(d){var h=d.price?d.price.toLocaleString()+'만원':'-';var a=d.avgPrice?d.avgPrice.toLocaleString()+'원/평':'-';var b=(d.year&&d.floors)?'🏗️ '+Math.floor(d.year)+'년/'+Math.floor(d.floors)+'층<br>':'';var g=(d.gap!=null)?'<span style="color:'+(d.gap>0?'#1f9d57':'#e5484d')+';font-weight:bold">📊 '+(d.gap>0?'+':'')+d.gap.toFixed(1)+'%</span>':'';var ex='';if(d.dir)ex+='🧭 '+d.dir+' ';if(d.rb)ex+='🚪 '+d.rb+' ';if(d.mgmt)ex+='🏢 관리비 '+d.mgmt+'만 ';if(ex)ex='<div style="font-size:11.5px;color:#666;margin-top:2px">'+ex.trim()+'</div>';var rent=d.deal==='월세'&&d.rent?'<br>💸 월세 '+d.rent.toLocaleString()+'만':'';var fav=d.fav?'<span style="font-size:11px;background:#fff3e0;padding:1px 6px;border-radius:4px;margin-left:6px">⭐</span>':'';var st=d.status?'<span style="font-size:10px;color:#888;margin-left:4px">['+d.status+']</span>':'';return '<div style="font-family:Pretendard,sans-serif;font-size:13px;min-width:200px;line-height:1.6"><b style="font-size:15px">'+d.name+'</b>'+fav+st+'<hr style="margin:4px 0;border:none;border-top:1px solid #eee">📍 '+d.addr+'<br>🏷️ '+(d.deal||'-')+' · '+(d.mtype||'-')+'<br>💰 '+h+rent+'<br>📊 '+a+'<br>'+b+ex+g+'</div>';}
 var ms=[],cg=L.markerClusterGroup({maxClusterRadius:50});
 D.forEach(function(d,i){var m=L.marker([d.lat,d.lng],{icon:mI(C[d.deal]||'#999')});m.bindPopup(pH(d),{maxWidth:280});m.on('click',function(){hL(i)});m.addTo(map);cg.addLayer(m);ms.push(m)});
-function rL(f){var c=document.getElementById('li');c.innerHTML='';var n=0;D.forEach(function(d,i){if(f&&f!=='전체'&&d.deal!==f)return;n++;var v=document.createElement('div');v.className='it';v.setAttribute('data-idx',i);v.innerHTML='<div class="nm"><span class="dt" style="background:'+(C[d.deal]||'#999')+'"></span>'+d.name+'</div><div class="ad">'+d.addr+'</div><div class="inf"><span>'+(d.deal||'-')+'</span><span>💰 '+(d.price?d.price.toLocaleString()+'만':'-')+'</span>'+(d.gap!=null?'<span style="color:'+(d.gap>0?'#1f9d57':'#e5484d')+';font-weight:bold">'+(d.gap>0?'+':'')+d.gap.toFixed(1)+'%</span>':'')+'</div>';v.onclick=function(){fM(i)};c.appendChild(v)});document.getElementById('lc').textContent=n+'개'}
+function rL(f){var c=document.getElementById('li');c.innerHTML='';var n=0;D.forEach(function(d,i){if(f&&f!=='전체'&&d.deal!==f)return;n++;var v=document.createElement('div');v.className='it';v.setAttribute('data-idx',i);var ex2='';if(d.dir||d.mgmt){var bits=[];if(d.dir)bits.push(d.dir);if(d.mgmt)bits.push('관리비'+d.mgmt+'만');ex2='<div style="font-size:10px;color:#aaa;margin-left:14px;margin-top:1px">'+bits.join(' · ')+'</div>'}v.innerHTML='<div class="nm"><span class="dt" style="background:'+(C[d.deal]||'#999')+'"></span>'+d.name+(d.fav?' ⭐':'')+'</div><div class="ad">'+d.addr+'</div><div class="inf"><span>'+(d.deal||'-')+'</span><span>💰 '+(d.price?d.price.toLocaleString()+'만':'-')+'</span>'+(d.gap!=null?'<span style="color:'+(d.gap>0?'#1f9d57':'#e5484d')+';font-weight:bold">'+(d.gap>0?'+':'')+d.gap.toFixed(1)+'%</span>':'')+'</div>'+ex2;v.onclick=function(){fM(i)};c.appendChild(v)});document.getElementById('lc').textContent=n+'개'}
 function fM(i){map.setView([D[i].lat,D[i].lng],17);ms[i].openPopup();hL(i)}
 function hL(i){document.querySelectorAll('.it').forEach(function(e){e.classList.remove('ac')});var t=document.querySelector('.it[data-idx="'+i+'"]');if(t){t.classList.add('ac');t.scrollIntoView({behavior:'smooth',block:'nearest'})}}
 window.fL=function(){rL(document.getElementById('df').value)};rL('전체');
