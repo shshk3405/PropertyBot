@@ -336,6 +336,10 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
         props["최근 거래 평당가(원)"] = {"number": market["avg"]}
         props["비교 거래 건수"] = {"number": market["count"]}
         props["비교 기준"] = {"rich_text": [{"text": {"content": market["basis"]}}]}
+        _prev_hist = (row.get("가격이력") or "").strip()
+        _new_line = f"[{date.today().isoformat()}] 실거래 평당 {fmt_eok_won(market['avg'])} ({market['basis']})"
+        _hist = (_prev_hist + "\n" + _new_line) if _prev_hist else _new_line
+        props["가격이력"] = {"rich_text": [{"text": {"content": _hist[-1900:]}}]}
 
     props = filter_props(props, schema)
     if not props:
@@ -389,6 +393,8 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
             props["방수욕실수"] = {"rich_text": [{"text": {"content": extra_details["방수욕실수"]}}]}
         if extra_details.get("특징메모"):
             props["특징메모"] = {"rich_text": [{"text": {"content": extra_details["특징메모"]}}]}
+        if extra_details.get("사진"):
+            props["사진"] = {"files": [{"type": "external", "name": f"사진{i+1}", "external": {"url": u}} for i, u in enumerate(extra_details["사진"])]}
     if juso:
         props["도로명 주소"] = {"rich_text": [{"text": {"content": juso["roadAddr"]}}]}
         props["PNU 코드"] = {"rich_text": [{"text": {"content": juso["pnu"]}}]}
@@ -418,6 +424,7 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
         props["최근 거래 평당가(원)"] = {"number": market["avg"]}
         props["비교 거래 건수"] = {"number": market["count"]}
         props["비교 기준"] = {"rich_text": [{"text": {"content": market["basis"]}}]}
+        props["가격이력"] = {"rich_text": [{"text": {"content": f"[{date.today().isoformat()}] 실거래 평당 {fmt_eok_won(market['avg'])} ({market['basis']})"}}]}
     # 신규 기본값 (스키마에 있을 때만)
     props["상태"] = {"select": {"name": "검토중"}}
     return notion.pages.create(parent={"database_id": db_id},
@@ -450,6 +457,9 @@ def load_notion_list(notion_token, db_id):
             def dt(k):
                 d = pr.get(k, {}).get("date"); return d["start"] if d else ""
             def msel(k): return [o["name"] for o in pr.get(k, {}).get("multi_select", [])]
+            def img(k):
+                fs = pr.get(k, {}).get("files", [])
+                return [f.get("external", {}).get("url") or f.get("file", {}).get("url") for f in fs if f.get("external") or f.get("file")]
             rows.append({
                 "매물명": txt("매물명"), "주소": txt("주소"),
                 "거래방식": sel("거래방식"), "호가": num("호가(만원)"), "월세": num("월세"),
@@ -463,6 +473,7 @@ def load_notion_list(notion_token, db_id):
                 "입주가능일": dt("입주가능일"), "총주차대수": num("총주차대수"),
                 "세대당주차대수": num("세대당주차대수"),
                 "방수욕실수": txt("방수욕실수"), "특징메모": txt("특징메모"),
+                "사진": img("사진"), "가격이력": txt("가격이력"), "메모이력": txt("메모이력"),
                 "page_id": p["id"],
             })
         if not data.get("has_more"):
@@ -874,6 +885,9 @@ _REC_COLS = [
     ("세대당주차대수", "숫자(Number)", "예: 1"),
     ("방수욕실수", "텍스트(Text)", "예: 3/2"),
     ("특징메모", "텍스트(Text)", "매물설명·특징 등 자유 기록"),
+    ("사진", "파일과 미디어(Files)", "임장 사진 (URL로 첨부)"),
+    ("가격이력", "텍스트(Text)", "재조회 시 자동 누적되는 가격 변동 기록"),
+    ("메모이력", "텍스트(Text)", "임장 메모 누적 기록 (날짜별)"),
 ]
 if schema:
     _missing = [c for c in _REC_COLS if c[0] not in schema]
@@ -1049,6 +1063,7 @@ elif active_tab == TAB_LABELS[1]:
             in_parking_per_unit = st.number_input("세대당주차대수", min_value=0, value=0, step=1)
         in_feature_memo = st.text_area("특징메모", placeholder="매물특징·매물설명 등 자유롭게 붙여넣기 (협의사항 등도 여기에)",
                                        height=80)
+        in_photos = st.text_area("사진 URL (한 줄에 하나씩)", placeholder="https://... (이미지 URL, 한 줄에 하나)", height=70)
 
     extra_details = {
         "방향": in_direction.strip() if in_direction.strip() else None,
@@ -1058,6 +1073,7 @@ elif active_tab == TAB_LABELS[1]:
         "세대당주차대수": in_parking_per_unit if in_parking_per_unit > 0 else None,
         "방수욕실수": in_rooms_baths.strip() if in_rooms_baths.strip() else None,
         "특징메모": in_feature_memo.strip() if in_feature_memo.strip() else None,
+        "사진": [u.strip() for u in in_photos.split("\n") if u.strip()] or None,
     }
 
     if st.button("🔍 조회", type="primary", disabled=not (name and address), use_container_width=True):
@@ -1404,6 +1420,26 @@ elif active_tab == TAB_LABELS[2]:
                                f"color:#57575f;white-space:pre-wrap;'>{sel['특징메모']}</div>",
                                unsafe_allow_html=True)
 
+                if sel.get("사진"):
+                    _ph = "<div style='display:flex;gap:8px;overflow-x:auto;margin-top:10px;padding-bottom:4px;'>"
+                    for _u in sel["사진"]:
+                        _ph += f"<img src='{_u}' style='height:110px;border-radius:10px;object-fit:cover;flex:none;'/>"
+                    _ph += "</div>"
+                    st.markdown(_ph, unsafe_allow_html=True)
+
+                if sel.get("가격이력") or sel.get("메모이력"):
+                    _hc1, _hc2 = st.columns(2)
+                    with _hc1:
+                        if sel.get("가격이력"):
+                            with st.expander("📈 가격 변동 이력"):
+                                for _line in sel["가격이력"].split("\n"):
+                                    if _line.strip(): st.caption(_line.strip())
+                    with _hc2:
+                        if sel.get("메모이력"):
+                            with st.expander("📝 임장 메모 이력"):
+                                for _line in sel["메모이력"].split("\n"):
+                                    if _line.strip(): st.caption(_line.strip())
+
                 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
                 # 임장 기록 편집
@@ -1434,6 +1470,11 @@ elif active_tab == TAB_LABELS[2]:
                             "임장체크": {"multi_select": [{"name": c} for c in new_checks]},
                             "메모": {"rich_text": [{"text": {"content": new_memo}}]},
                         }
+                        if new_memo.strip() and new_memo.strip() != (sel.get("메모") or "").strip():
+                            _prev_mh = (sel.get("메모이력") or "").strip()
+                            _mline = f"[{date.today().isoformat()}] {new_memo.strip()}"
+                            _mh = (_prev_mh + "\n" + _mline) if _prev_mh else _mline
+                            props["메모이력"] = {"rich_text": [{"text": {"content": _mh[-1900:]}}]}
                         props = filter_props(props, schema)
                         if props:
                             try:
@@ -1512,7 +1553,10 @@ elif active_tab == TAB_LABELS[2]:
                                                           value=int(sel.get("세대당주차대수") or 0), step=1)
                         d_memo = st.text_area("특징메모", value=sel.get("특징메모") or "",
                                               placeholder="매물특징·매물설명 등 자유롭게", height=80)
+                        d_photos = st.text_area("사진 URL (한 줄에 하나씩)", value="\n".join(sel.get("사진") or []),
+                                                placeholder="https://... (이미지 URL, 한 줄에 하나)", height=70)
                         if st.form_submit_button("💾 상세 정보 저장", type="primary"):
+                            _photo_urls = [u.strip() for u in d_photos.split("\n") if u.strip()]
                             dprops = {
                                 "방향": {"rich_text": [{"text": {"content": d_dir.strip()}}]},
                                 "관리비(만원)": {"number": int(d_mgmt) if d_mgmt > 0 else None},
@@ -1521,6 +1565,7 @@ elif active_tab == TAB_LABELS[2]:
                                 "세대당주차대수": {"number": int(d_park_unit) if d_park_unit > 0 else None},
                                 "방수욕실수": {"rich_text": [{"text": {"content": d_rb.strip()}}]},
                                 "특징메모": {"rich_text": [{"text": {"content": d_memo.strip()}}]},
+                                "사진": {"files": [{"type": "external", "name": f"사진{i+1}", "external": {"url": u}} for i, u in enumerate(_photo_urls)]},
                             }
                             dprops = filter_props(dprops, schema)
                             if dprops:
