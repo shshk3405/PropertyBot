@@ -196,46 +196,6 @@ def geocode_address(road_addr, kakao_key):
         return None, None, friendly_error(e)
 
 
-def nearest_subway(lat, lng, kakao_key):
-    """카카오 카테고리 검색(SW8=지하철역)으로 가장 가까운 역과 거리를 반환."""
-    try:
-        r = SESSION.get("https://dapi.kakao.com/v2/local/search/category.json",
-            params={"category_group_code": "SW8", "x": lng, "y": lat, "radius": 3000, "sort": "distance"},
-            headers={"Authorization": f"KakaoAK {kakao_key}"}, timeout=15)
-        docs = r.json().get("documents", [])
-        if not docs:
-            return None
-        d = docs[0]
-        dist = int(float(d.get("distance", 0)))
-        return {"name": d.get("place_name", ""), "dist": dist, "walk_min": max(1, round(dist / 67))}
-    except Exception:
-        return None
-
-
-def _haversine_m(lat1, lng1, lat2, lng2):
-    from math import radians, sin, cos, sqrt, atan2
-    R = 6371000
-    p1, p2 = radians(lat1), radians(lat2)
-    dp, dl = radians(lat2 - lat1), radians(lng2 - lng1)
-    a = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
-    return 2 * R * atan2(sqrt(a), sqrt(1 - a))
-
-
-def optimize_route(rows_geo):
-    """좌표가 있는 매물들을 최근접 이웃(Nearest Neighbor) 방식으로 동선 순서 정렬.
-    반환: (정렬된 리스트, 총 거리(m))"""
-    remaining = rows_geo[:]
-    route = [remaining.pop(0)]
-    total_m = 0
-    while remaining:
-        last = route[-1]
-        nxt = min(remaining, key=lambda r: _haversine_m(last["위도"], last["경도"], r["위도"], r["경도"]))
-        total_m += _haversine_m(last["위도"], last["경도"], nxt["위도"], nxt["경도"])
-        remaining.remove(nxt)
-        route.append(nxt)
-    return route, int(total_m)
-
-
 def get_market_price(j, mtype, deal_type, bldg_key, months=6, early_stop_n=20, time_budget=40):
     """실거래가 조회. time_budget(초)을 넘기면 데이터가 희소해도 그 시점까지 모은 것만으로 반환.
     (빌라·월세처럼 거래가 희소한 유형은 조기 종료 기준에 못 미쳐 6개월을 다 훑는 경우가 있는데,
@@ -328,7 +288,7 @@ def update_notion_page(notion_token, page_id, props):
         json={"properties": props}, timeout=25)
 
 
-def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key, kakao_key=None):
+def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
     """기존 매물 1건을 재조회 → 건축물대장·실거래 시세를 다시 받아 노션 갱신.
     반환: (갱신된 필드 수, 사람이 읽을 메시지)"""
     addr = (row.get("주소") or "").strip()
@@ -368,16 +328,6 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key, ka
         # vio가 None(정보없음/확인불가)이면 필드를 건드리지 않는다 —
         # "정보없음"을 "위반없음"으로 오기록하지 않기 위함.
 
-    if kakao_key:
-        glat, glng, _gerr = geocode_address(juso.get("roadAddr") or addr, kakao_key)
-        if glat and glng:
-            props["위도"] = {"number": glat}
-            props["경도"] = {"number": glng}
-            _sub = nearest_subway(glat, glng, kakao_key)
-            if _sub:
-                props["최근접역"] = {"rich_text": [{"text": {"content": _sub["name"]}}]}
-                props["역거리(m)"] = {"number": _sub["dist"]}
-
     deal_type = row.get("거래방식")
     market = None
     if mtype and deal_type and (mtype, deal_type) in RTMS_ENDPOINTS:
@@ -386,10 +336,6 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key, ka
         props["최근 거래 평당가(원)"] = {"number": market["avg"]}
         props["비교 거래 건수"] = {"number": market["count"]}
         props["비교 기준"] = {"rich_text": [{"text": {"content": market["basis"]}}]}
-        _prev_hist = (row.get("가격이력") or "").strip()
-        _new_line = f"[{date.today().isoformat()}] 실거래 평당 {fmt_eok_won(market['avg'])} ({market['basis']})"
-        _hist = (_prev_hist + "\n" + _new_line) if _prev_hist else _new_line
-        props["가격이력"] = {"rich_text": [{"text": {"content": _hist[-1900:]}}]}
 
     props = filter_props(props, schema)
     if not props:
@@ -411,7 +357,7 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key, ka
     return len(props), " · ".join(parts) or "갱신 완료"
 
 
-def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area, juso, bldg, market, monthly_rent=None, extra_details=None, geo=None):
+def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area, juso, bldg, market, monthly_rent=None, extra_details=None):
     """노션 DB에 새 페이지 생성.
     월세 거래의 경우 price는 보증금, monthly_rent는 매월 월세 금액을 의미한다.
     extra_details: {"방향": str, "관리비(만원)": int, "입주가능일": date|None,
@@ -443,8 +389,6 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
             props["방수욕실수"] = {"rich_text": [{"text": {"content": extra_details["방수욕실수"]}}]}
         if extra_details.get("특징메모"):
             props["특징메모"] = {"rich_text": [{"text": {"content": extra_details["특징메모"]}}]}
-        if extra_details.get("사진"):
-            props["사진"] = {"files": [{"type": "external", "name": f"사진{i+1}", "external": {"url": u}} for i, u in enumerate(extra_details["사진"])]}
     if juso:
         props["도로명 주소"] = {"rich_text": [{"text": {"content": juso["roadAddr"]}}]}
         props["PNU 코드"] = {"rich_text": [{"text": {"content": juso["pnu"]}}]}
@@ -470,18 +414,10 @@ def save_to_notion(notion, db_id, schema, name, address, deal_type, price, area,
         if vio is not None:
             props["위반건축물"] = {"checkbox": vio == "Y"}
         # vio가 None이면 저장하지 않음 (정보없음 → 위반없음 오기록 방지)
-    if geo:
-        if geo.get("lat") and geo.get("lng"):
-            props["위도"] = {"number": geo["lat"]}
-            props["경도"] = {"number": geo["lng"]}
-        if geo.get("subway"):
-            props["최근접역"] = {"rich_text": [{"text": {"content": geo["subway"]["name"]}}]}
-            props["역거리(m)"] = {"number": geo["subway"]["dist"]}
     if market:
         props["최근 거래 평당가(원)"] = {"number": market["avg"]}
         props["비교 거래 건수"] = {"number": market["count"]}
         props["비교 기준"] = {"rich_text": [{"text": {"content": market["basis"]}}]}
-        props["가격이력"] = {"rich_text": [{"text": {"content": f"[{date.today().isoformat()}] 실거래 평당 {fmt_eok_won(market['avg'])} ({market['basis']})"}}]}
     # 신규 기본값 (스키마에 있을 때만)
     props["상태"] = {"select": {"name": "검토중"}}
     return notion.pages.create(parent={"database_id": db_id},
@@ -514,9 +450,6 @@ def load_notion_list(notion_token, db_id):
             def dt(k):
                 d = pr.get(k, {}).get("date"); return d["start"] if d else ""
             def msel(k): return [o["name"] for o in pr.get(k, {}).get("multi_select", [])]
-            def img(k):
-                fs = pr.get(k, {}).get("files", [])
-                return [f.get("external", {}).get("url") or f.get("file", {}).get("url") for f in fs if f.get("external") or f.get("file")]
             rows.append({
                 "매물명": txt("매물명"), "주소": txt("주소"),
                 "거래방식": sel("거래방식"), "호가": num("호가(만원)"), "월세": num("월세"),
@@ -530,8 +463,6 @@ def load_notion_list(notion_token, db_id):
                 "입주가능일": dt("입주가능일"), "총주차대수": num("총주차대수"),
                 "세대당주차대수": num("세대당주차대수"),
                 "방수욕실수": txt("방수욕실수"), "특징메모": txt("특징메모"),
-                "사진": img("사진"), "가격이력": txt("가격이력"), "메모이력": txt("메모이력"),
-                "최근접역": txt("최근접역"), "역거리(m)": num("역거리(m)"),
                 "page_id": p["id"],
             })
         if not data.get("has_more"):
@@ -943,11 +874,6 @@ _REC_COLS = [
     ("세대당주차대수", "숫자(Number)", "예: 1"),
     ("방수욕실수", "텍스트(Text)", "예: 3/2"),
     ("특징메모", "텍스트(Text)", "매물설명·특징 등 자유 기록"),
-    ("사진", "파일과 미디어(Files)", "임장 사진 (URL로 첨부)"),
-    ("가격이력", "텍스트(Text)", "재조회 시 자동 누적되는 가격 변동 기록"),
-    ("메모이력", "텍스트(Text)", "임장 메모 누적 기록 (날짜별)"),
-    ("최근접역", "텍스트(Text)", "가장 가까운 지하철역"),
-    ("역거리(m)", "숫자(Number)", "지하철역까지 도보 거리(m)"),
 ]
 if schema:
     _missing = [c for c in _REC_COLS if c[0] not in schema]
@@ -1123,7 +1049,6 @@ elif active_tab == TAB_LABELS[1]:
             in_parking_per_unit = st.number_input("세대당주차대수", min_value=0, value=0, step=1)
         in_feature_memo = st.text_area("특징메모", placeholder="매물특징·매물설명 등 자유롭게 붙여넣기 (협의사항 등도 여기에)",
                                        height=80)
-        in_photos = st.text_area("사진 URL (한 줄에 하나씩)", placeholder="https://... (이미지 URL, 한 줄에 하나)", height=70)
 
     extra_details = {
         "방향": in_direction.strip() if in_direction.strip() else None,
@@ -1133,7 +1058,6 @@ elif active_tab == TAB_LABELS[1]:
         "세대당주차대수": in_parking_per_unit if in_parking_per_unit > 0 else None,
         "방수욕실수": in_rooms_baths.strip() if in_rooms_baths.strip() else None,
         "특징메모": in_feature_memo.strip() if in_feature_memo.strip() else None,
-        "사진": [u.strip() for u in in_photos.split("\n") if u.strip()] or None,
     }
 
     if st.button("🔍 조회", type="primary", disabled=not (name and address), use_container_width=True):
@@ -1161,9 +1085,6 @@ elif active_tab == TAB_LABELS[1]:
                 if mtype and (mtype, deal_type) in RTMS_ENDPOINTS:
                     with st.spinner(f"실거래가 조회 중 ({mtype} · {deal_type})..."):
                         res["market"] = get_market_price(juso, mtype, deal_type, bldg_key)
-            with st.spinner("좌표·주변 지하철역 조회 중..."):
-                glat, glng, _gerr = geocode_address(juso.get("roadAddr") or address, kakao_key)
-                res["geo"] = {"lat": glat, "lng": glng, "subway": nearest_subway(glat, glng, kakao_key)} if (glat and glng) else None
             st.session_state["lookup"] = res
 
     res = st.session_state.get("lookup")
@@ -1205,10 +1126,6 @@ elif active_tab == TAB_LABELS[1]:
             m4.metric("건폐율 / 용적률", "—")
             m5.metric("위반건축물", "확인불가")
         m6.metric("PNU", juso["pnu"] if juso else "—")
-        _geo = res.get("geo")
-        if _geo and _geo.get("subway"):
-            _sub = _geo["subway"]
-            st.caption(f"🚇 가장 가까운 역: {_sub['name']} · {_sub['dist']}m (도보 약 {_sub['walk_min']}분)")
         if res.get("bldg_err"):
             st.caption(f"건축물대장: {res['bldg_err']}")
         if res.get("bldg_note"):
@@ -1256,7 +1173,7 @@ elif active_tab == TAB_LABELS[1]:
                     try:
                         page = save_to_notion(notion, db_id, schema, name, address,
                                               deal_type, price, area, juso, bldg, market,
-                                              monthly_rent, extra_details, geo=res.get("geo"))
+                                              monthly_rent, extra_details)
                         st.success(f"✅ 저장 완료! [페이지 열기]({page.get('url','')})")
                         st.session_state.pop("lookup", None)
                     except Exception as e:
@@ -1284,44 +1201,12 @@ elif active_tab == TAB_LABELS[2]:
     else:
         _plan = [r for r in rows if r.get("상태") == "방문예정"]
         if _plan:
-            _order_ids = st.session_state.get("_route_order")
-            _rd = st.session_state.get("_route_dist")
-            _dist_txt = ""
-            if _order_ids:
-                _by_id = {r["page_id"]: r for r in _plan}
-                _plan_ordered = [_by_id[i] for i in _order_ids if i in _by_id]
-                if len(_plan_ordered) == len(_plan):
-                    _plan = _plan_ordered
-                    if _rd is not None:
-                        _dist_txt = f" · 총 {_rd/1000:.1f}km · 도보 약 {round(_rd/67)}분"
             _names = "  →  ".join(r["매물명"] for r in _plan)
-            _rc1, _rc2 = st.columns([4, 1.3])
-            with _rc1:
-                st.markdown(
-                    f"<div style='background:{ACCENT};color:#fff;border-radius:13px;padding:14px 20px;margin-bottom:12px;'>"
-                    f"<div style='font-size:12px;font-weight:700;opacity:.85;'>오늘의 임장 루트 · 방문예정 {len(_plan)}건{_dist_txt}</div>"
-                    f"<div style='font-size:15px;font-weight:800;margin-top:4px;'>{_names}</div></div>",
-                    unsafe_allow_html=True)
-            with _rc2:
-                if st.button("🧭 동선 최적화", key="opt_route_btn", use_container_width=True, disabled=len(_plan) < 2):
-                    with st.spinner("좌표 확인 중..."):
-                        for r in _plan:
-                            if r.get("위도") and r.get("경도"):
-                                continue
-                            _j, _ = search_address(r["주소"], juso_key)
-                            _road = _j.get("roadAddr") if _j else r["주소"]
-                            _glat, _glng, _ = geocode_address(_road or r["주소"], kakao_key)
-                            if _glat and _glng:
-                                r["위도"], r["경도"] = _glat, _glng
-                    _geo_ok = [r for r in _plan if r.get("위도") and r.get("경도")]
-                    _geo_bad = [r for r in _plan if not (r.get("위도") and r.get("경도"))]
-                    if len(_geo_ok) >= 2:
-                        _ordered, _dist_m = optimize_route(_geo_ok)
-                        st.session_state["_route_order"] = [r["page_id"] for r in _ordered] + [r["page_id"] for r in _geo_bad]
-                        st.session_state["_route_dist"] = _dist_m
-                        st.rerun()
-                    else:
-                        st.warning("좌표를 확인할 수 있는 매물이 2건 미만이라 최적화할 수 없어요.")
+            st.markdown(
+                f"<div style='background:{ACCENT};color:#fff;border-radius:13px;padding:14px 20px;margin-bottom:12px;'>"
+                f"<div style='font-size:12px;font-weight:700;opacity:.85;'>오늘의 임장 루트 · 방문예정 {len(_plan)}건</div>"
+                f"<div style='font-size:15px;font-weight:800;margin-top:4px;'>{_names}</div></div>",
+                unsafe_allow_html=True)
 
         for r in rows:
             r["_gap"] = compute_gap(r)
@@ -1480,7 +1365,6 @@ elif active_tab == TAB_LABELS[2]:
                     ("실거래 평당", fmt_eok_won(sise) if sise else "—"),
                     ("거래방식", sel.get("거래방식") or "—"),
                     ("시세갭", f"{gap:+.1f}%" if gap is not None else "—"),
-                    ("최근접역", f"{sel['최근접역']} · {int(sel['역거리(m)'])}m" if sel.get("최근접역") and sel.get("역거리(m)") else "—"),
                 ]
                 tile_html = "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px;'>"
                 for _lb, _vl in tiles:
@@ -1520,26 +1404,6 @@ elif active_tab == TAB_LABELS[2]:
                                f"color:#57575f;white-space:pre-wrap;'>{sel['특징메모']}</div>",
                                unsafe_allow_html=True)
 
-                if sel.get("사진"):
-                    _ph = "<div style='display:flex;gap:8px;overflow-x:auto;margin-top:10px;padding-bottom:4px;'>"
-                    for _u in sel["사진"]:
-                        _ph += f"<img src='{_u}' style='height:110px;border-radius:10px;object-fit:cover;flex:none;'/>"
-                    _ph += "</div>"
-                    st.markdown(_ph, unsafe_allow_html=True)
-
-                if sel.get("가격이력") or sel.get("메모이력"):
-                    _hc1, _hc2 = st.columns(2)
-                    with _hc1:
-                        if sel.get("가격이력"):
-                            with st.expander("📈 가격 변동 이력"):
-                                for _line in sel["가격이력"].split("\n"):
-                                    if _line.strip(): st.caption(_line.strip())
-                    with _hc2:
-                        if sel.get("메모이력"):
-                            with st.expander("📝 임장 메모 이력"):
-                                for _line in sel["메모이력"].split("\n"):
-                                    if _line.strip(): st.caption(_line.strip())
-
                 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
                 # 임장 기록 편집
@@ -1570,11 +1434,6 @@ elif active_tab == TAB_LABELS[2]:
                             "임장체크": {"multi_select": [{"name": c} for c in new_checks]},
                             "메모": {"rich_text": [{"text": {"content": new_memo}}]},
                         }
-                        if new_memo.strip() and new_memo.strip() != (sel.get("메모") or "").strip():
-                            _prev_mh = (sel.get("메모이력") or "").strip()
-                            _mline = f"[{date.today().isoformat()}] {new_memo.strip()}"
-                            _mh = (_prev_mh + "\n" + _mline) if _prev_mh else _mline
-                            props["메모이력"] = {"rich_text": [{"text": {"content": _mh[-1900:]}}]}
                         props = filter_props(props, schema)
                         if props:
                             try:
@@ -1653,10 +1512,7 @@ elif active_tab == TAB_LABELS[2]:
                                                           value=int(sel.get("세대당주차대수") or 0), step=1)
                         d_memo = st.text_area("특징메모", value=sel.get("특징메모") or "",
                                               placeholder="매물특징·매물설명 등 자유롭게", height=80)
-                        d_photos = st.text_area("사진 URL (한 줄에 하나씩)", value="\n".join(sel.get("사진") or []),
-                                                placeholder="https://... (이미지 URL, 한 줄에 하나)", height=70)
                         if st.form_submit_button("💾 상세 정보 저장", type="primary"):
-                            _photo_urls = [u.strip() for u in d_photos.split("\n") if u.strip()]
                             dprops = {
                                 "방향": {"rich_text": [{"text": {"content": d_dir.strip()}}]},
                                 "관리비(만원)": {"number": int(d_mgmt) if d_mgmt > 0 else None},
@@ -1665,7 +1521,6 @@ elif active_tab == TAB_LABELS[2]:
                                 "세대당주차대수": {"number": int(d_park_unit) if d_park_unit > 0 else None},
                                 "방수욕실수": {"rich_text": [{"text": {"content": d_rb.strip()}}]},
                                 "특징메모": {"rich_text": [{"text": {"content": d_memo.strip()}}]},
-                                "사진": {"files": [{"type": "external", "name": f"사진{i+1}", "external": {"url": u}} for i, u in enumerate(_photo_urls)]},
                             }
                             dprops = filter_props(dprops, schema)
                             if dprops:
@@ -1686,7 +1541,7 @@ elif active_tab == TAB_LABELS[2]:
                     if st.button("🔄 재조회", use_container_width=True, key="relk_" + sel["page_id"]):
                         with st.spinner("재조회 중..."):
                             try:
-                                n, msg = relookup_and_update(notion_token, db_id, schema, sel, juso_key, bldg_key, kakao_key)
+                                n, msg = relookup_and_update(notion_token, db_id, schema, sel, juso_key, bldg_key)
                             except Exception as e:
                                 n, msg = 0, f"재조회 실패: {friendly_error(e)}"
                         if n:
@@ -1739,7 +1594,7 @@ elif active_tab == TAB_LABELS[2]:
                     _label = target.get("매물명") or "(이름없음)"
                     prog.progress(_idx / len(rows), text=f"{_label} 재조회 중... ({_idx + 1}/{len(rows)})")
                     try:
-                        n, msg = relookup_and_update(notion_token, db_id, schema, target, juso_key, bldg_key, kakao_key)
+                        n, msg = relookup_and_update(notion_token, db_id, schema, target, juso_key, bldg_key)
                         if n:
                             ok += 1
                         else:
