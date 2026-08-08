@@ -705,6 +705,29 @@ def render_funding_plan_editor(profile_path):
                   f" (목표가는 '내 구매력 현황'에서 수정)")
 
 
+NOTE_CATEGORIES = ["세금", "대출", "계약", "청약", "실전팁", "용어", "법률", "기타"]
+NOTE_CAT_COLORS = {"세금": "#e5484d", "대출": "#2f6feb", "계약": "#2f9e63", "청약": "#8b5cf6",
+                   "실전팁": "#c98a00", "용어": "#6b7280", "법률": "#0ea5e9", "기타": "#a3a3a3"}
+
+
+def load_knowledge_notes(path):
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_knowledge_notes(path, notes):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(notes, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def load_guide_progress(path):
     if not os.path.exists(path):
         return {}
@@ -885,7 +908,7 @@ if schema:
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
 
-TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "📖 매수 가이드", "💰 자금 계산기"]
+TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "📖 매수 가이드", "💰 자금 계산기", "📝 부동산 노트"]
 if "active_tab" not in st.session_state:
     st.session_state["active_tab"] = TAB_LABELS[0]
 active_tab = st.radio("메뉴", TAB_LABELS, horizontal=True,
@@ -969,7 +992,8 @@ if active_tab == TAB_LABELS[0]:
                 html += "</div>"
                 st.markdown(html, unsafe_allow_html=True)
             else:
-                st.caption("전용면적(평)·호가·평당가가 모두 있는 매물이 있어야 시세갭을 계산할 수 있어요.")
+                st.caption("시세갭 계산에는 전용면적(평)·호가·실거래 평당가가 모두 필요해요. "
+                          "매물 목록에서 '재조회'로 평당가를 받아오세요.")
         with colR:
             st.markdown("##### 법정동별 평균 평당 호가 (억)")
             dong_vals = {}
@@ -1354,7 +1378,14 @@ elif active_tab == TAB_LABELS[2]:
                         f"<div style='height:100%;width:{sw:.0f}%;background:{ACCENT};border-radius:99px;'></div></div></div>"
                         f"</div>", unsafe_allow_html=True)
                 else:
-                    st.info("전용면적(평)·호가·평당가가 모두 있어야 시세 비교가 나와요. 아래 '재조회'로 평당가를 받아오세요.")
+                    _missing_items = []
+                    if not sel.get("전용면적(평)"):
+                        _missing_items.append("**전용면적(평)** → '새 매물 입력' 시 입력하거나, 아래 '기본 정보 수정'에서 추가")
+                    if not sel.get("호가"):
+                        _missing_items.append("**호가** → '새 매물 입력' 시 입력하거나, 아래 '기본 정보 수정'에서 추가")
+                    if not sise:
+                        _missing_items.append("**실거래 평당가** → 아래 '재조회' 버튼으로 받아올 수 있어요 (비교 가능한 실거래 데이터가 있어야 함)")
+                    st.info("시세 비교를 하려면 다음 정보가 필요해요:\n\n" + "\n\n".join(f"- {m}" for m in _missing_items))
 
                 # 건축물대장 타일
                 area_txt = f"{sel['전용면적(평)']:.1f}평" if sel.get("전용면적(평)") else "—"
@@ -1954,3 +1985,97 @@ elif active_tab == TAB_LABELS[5]:
                         unsafe_allow_html=True)
         except Exception as e:
             st.error(f"매물 목록 조회 실패: {friendly_error(e)}")
+
+# ════════════════ 탭 6: 부동산 노트 ════════════════
+elif active_tab == TAB_LABELS[6]:
+    st.subheader("📝 부동산 노트")
+    st.caption("뉴스·SNS·상담에서 주워들은 부동산 지식을 카테고리별로 스크랩해두세요.")
+
+    _notes_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge_notes.json")
+    _notes = load_knowledge_notes(_notes_path)
+
+    # ── 새 노트 추가 ──
+    with st.expander("➕ 새 노트 추가", expanded=not bool(_notes)):
+        with st.form("add_note_form", clear_on_submit=True):
+            _nc1, _nc2 = st.columns([1, 2])
+            with _nc1:
+                _n_cat = st.selectbox("카테고리", NOTE_CATEGORIES)
+            with _nc2:
+                _n_title = st.text_input("제목", placeholder="예) 전세 계약갱신청구권 5% 상한 적용 시점")
+            _n_body = st.text_area("내용", placeholder="알게 된 내용을 자유롭게 적어두세요.\n마크다운 문법도 지원돼요.",
+                                   height=120)
+            _n_source = st.text_input("출처 (선택)", placeholder="예) 호갱노노 블로그, 부동산 카페, 세무사 상담 등")
+            if st.form_submit_button("💾 저장", type="primary"):
+                if _n_title.strip():
+                    _notes.insert(0, {
+                        "id": hashlib.md5(f"{_n_title}{time.time()}".encode()).hexdigest()[:8],
+                        "cat": _n_cat, "title": _n_title.strip(), "body": _n_body.strip(),
+                        "source": _n_source.strip(), "date": date.today().isoformat(),
+                    })
+                    save_knowledge_notes(_notes_path, _notes)
+                    st.success("✅ 저장 완료!")
+                    st.rerun()
+                else:
+                    st.warning("제목을 입력해주세요.")
+
+    if not _notes:
+        st.info("저장된 노트가 없어요. 위에서 첫 번째 노트를 추가해보세요!")
+    else:
+        # ── 카테고리 필터 ──
+        _all_cats = sorted(set(n.get("cat", "기타") for n in _notes))
+        _filter_cats = st.multiselect("카테고리 필터", _all_cats, default=_all_cats,
+                                      label_visibility="collapsed")
+        _filtered_notes = [n for n in _notes if n.get("cat", "기타") in _filter_cats]
+        st.caption(f"총 {len(_notes)}개 노트 중 {len(_filtered_notes)}개 표시")
+
+        # ── 노트 목록 ──
+        for _note in _filtered_notes:
+            _cat_color = NOTE_CAT_COLORS.get(_note.get("cat", "기타"), "#a3a3a3")
+            _header = (f"<span style='font-size:11px;font-weight:700;color:{_cat_color};"
+                       f"background:{_cat_color}1a;padding:2px 8px;border-radius:5px;'>"
+                       f"{_note.get('cat','기타')}</span> &nbsp;"
+                       f"**{_note.get('title','')}**")
+            with st.expander(_header, expanded=False):
+                if _note.get("body"):
+                    st.markdown(_note["body"])
+                _meta_parts = []
+                if _note.get("source"):
+                    _meta_parts.append(f"📎 {_note['source']}")
+                if _note.get("date"):
+                    _meta_parts.append(f"📅 {_note['date']}")
+                if _meta_parts:
+                    st.caption(" · ".join(_meta_parts))
+
+                # 수정/삭제
+                _edit_key = f"edit_{_note['id']}"
+                _ec1, _ec2 = st.columns([1, 1])
+                with _ec1:
+                    if st.button("✏️ 수정", key=f"btn_edit_{_note['id']}", use_container_width=True):
+                        st.session_state[_edit_key] = True
+                with _ec2:
+                    if st.button("🗑️ 삭제", key=f"btn_del_{_note['id']}", use_container_width=True):
+                        _notes = [n for n in _notes if n["id"] != _note["id"]]
+                        save_knowledge_notes(_notes_path, _notes)
+                        st.success("삭제 완료")
+                        st.rerun()
+
+                if st.session_state.get(_edit_key):
+                    with st.form(key=f"form_edit_{_note['id']}"):
+                        _e_cat = st.selectbox("카테고리", NOTE_CATEGORIES,
+                                              index=NOTE_CATEGORIES.index(_note["cat"]) if _note.get("cat") in NOTE_CATEGORIES else 0)
+                        _e_title = st.text_input("제목", value=_note.get("title", ""))
+                        _e_body = st.text_area("내용", value=_note.get("body", ""), height=120)
+                        _e_source = st.text_input("출처", value=_note.get("source", ""))
+                        if st.form_submit_button("💾 수정 저장", type="primary"):
+                            for n in _notes:
+                                if n["id"] == _note["id"]:
+                                    n.update({"cat": _e_cat, "title": _e_title.strip(),
+                                              "body": _e_body.strip(), "source": _e_source.strip()})
+                                    break
+                            save_knowledge_notes(_notes_path, _notes)
+                            st.session_state.pop(_edit_key, None)
+                            st.success("✅ 수정 완료!")
+                            st.rerun()
+
+        st.caption("💾 노트는 서버의 `knowledge_notes.json`에 저장돼요. "
+                  "Streamlit Cloud 무료 플랜에서는 앱이 재시작(reboot)되면 초기화될 수 있어요.")
