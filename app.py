@@ -329,9 +329,21 @@ def relookup_and_update(notion_token, db_id, schema, row, juso_key, bldg_key):
         # "정보없음"을 "위반없음"으로 오기록하지 않기 위함.
 
     deal_type = row.get("거래방식")
+    # 건축물대장에서 매물유형을 못 잡았으면 기존 저장값으로 폴백
+    if not mtype:
+        mtype = row.get("매물유형") or None
     market = None
     if mtype and deal_type and (mtype, deal_type) in RTMS_ENDPOINTS:
         market = get_market_price(juso, mtype, deal_type, bldg_key)
+    elif deal_type and not mtype:
+        # 매물유형을 전혀 모르는 경우 — 아파트 → 빌라 순으로 둘 다 시도
+        for _try_mtype in ["아파트", "빌라·연립·다세대"]:
+            if (_try_mtype, deal_type) in RTMS_ENDPOINTS:
+                market = get_market_price(juso, _try_mtype, deal_type, bldg_key)
+                if market:
+                    mtype = _try_mtype
+                    props["매물유형"] = {"select": {"name": mtype}}
+                    break
     if market:
         props["최근 거래 평당가(원)"] = {"number": market["avg"]}
         props["비교 거래 건수"] = {"number": market["count"]}
@@ -1103,12 +1115,25 @@ elif active_tab == TAB_LABELS[1]:
             res["bldg"] = bldg
             res["bldg_err"] = berr
             res["bldg_note"] = bnote
-            if bldg and deal_type:
+            mtype = None
+            if bldg:
                 mtype = map_type(bldg.get("mainPurpsCdNm", ""),
                                  int(bldg.get("grndFlrCnt") or 0) or None)
+            if deal_type:
                 if mtype and (mtype, deal_type) in RTMS_ENDPOINTS:
                     with st.spinner(f"실거래가 조회 중 ({mtype} · {deal_type})..."):
                         res["market"] = get_market_price(juso, mtype, deal_type, bldg_key)
+                elif not mtype:
+                    # 건축물대장 실패로 매물유형을 모르는 경우 — 아파트 → 빌라 순으로 시도
+                    for _try in ["아파트", "빌라·연립·다세대"]:
+                        if (_try, deal_type) in RTMS_ENDPOINTS:
+                            with st.spinner(f"실거래가 조회 중 ({_try} · {deal_type}, 추정)..."):
+                                _m = get_market_price(juso, _try, deal_type, bldg_key)
+                            if _m:
+                                res["market"] = _m
+                                mtype = _try
+                                break
+            res["mtype"] = mtype
             st.session_state["lookup"] = res
 
     res = st.session_state.get("lookup")
