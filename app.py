@@ -224,7 +224,12 @@ def get_market_price(j, mtype, deal_type, bldg_key, months=6, early_stop_n=20, t
                 d = {c.tag: (c.text or "").strip() for c in item}
                 try:
                     is_road = j["rn"] and j["rn"] in d.get("도로명", "")
-                    is_dong = j["emdNm"] and j["emdNm"] in d.get("법정동", "")
+                    # RTMS API는 법정동을 "가락"으로, 도로명주소 API는 "가락동"으로 반환하는 등
+                    # 접미사("동","읍","면","리") 유무가 달라 매칭 실패하는 경우가 있어서,
+                    # 양쪽 다 접미사를 벗긴 뒤 비교한다.
+                    _emd = (j.get("emdNm") or "").strip().rstrip("동읍면리")
+                    _api_dong = (d.get("법정동") or "").strip().rstrip("동읍면리")
+                    is_dong = _emd and _api_dong and (_emd in _api_dong or _api_dong in _emd)
                     if not is_road and not is_dong: continue
                     area = float(d.get("전용면적", 0))
                     if area <= 0: continue
