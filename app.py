@@ -572,6 +572,71 @@ def calc_affordability(annual_income, existing_monthly_payment, cash,
     }
 
 
+NEWS_IMPACT_OPTIONS = ["낮음", "중간", "높음"]
+NEWS_IMPACT_COLORS = {"낮음": "#9a9aa3", "중간": "#c98a00", "높음": "#e5484d"}
+NEWS_STATUS_OPTIONS = ["읽기 전", "재검토", "완료", "후속조사"]
+
+
+def load_news_clips(notion_token, news_db_id):
+    """뉴스 클리핑 DB에서 분야='부동산' 기사만 로드 (페이지네이션 포함)."""
+    rows = []
+    _headers = {"Authorization": f"Bearer {notion_token}",
+                "Notion-Version": "2022-06-28", "Content-Type": "application/json"}
+    _body = {
+        "filter": {"property": "분야", "multi_select": {"contains": "부동산"}},
+        "sorts": [{"property": "발견일", "direction": "descending"}],
+        "page_size": 100,
+    }
+    while True:
+        resp = SESSION.post(f"https://api.notion.com/v1/databases/{news_db_id}/query",
+                            headers=_headers, json=_body, timeout=30)
+        data = resp.json()
+        for p in data.get("results", []):
+            pr = p["properties"]
+            def txt(k):
+                prop = pr.get(k, {})
+                items = prop.get("title") or prop.get("rich_text") or []
+                return items[0]["plain_text"] if items else ""
+            def sel(k):
+                s = pr.get(k, {}).get("select"); return s["name"] if s else ""
+            def status(k):
+                s = pr.get(k, {}).get("status"); return s["name"] if s else ""
+            def dt(k):
+                d = pr.get(k, {}).get("date"); return d["start"] if d else ""
+            def chk(k): return pr.get(k, {}).get("checkbox", False)
+            def url_prop(k): return pr.get(k, {}).get("url") or ""
+            rows.append({
+                "제목": txt("이름"), "날짜": dt("발견일"), "중요도": sel("Impact"),
+                "상태": status("상태"), "URL": url_prop("원문 URL"),
+                "즐겨찾기": chk("즐겨찾기"), "page_id": p["id"],
+                "notion_url": p.get("url", ""),
+            })
+        if not data.get("has_more"):
+            break
+        _body["start_cursor"] = data["next_cursor"]
+    return rows
+
+
+def add_news_clip(notion_token, news_db_id, title, url, impact, clip_date):
+    """뉴스 클리핑 DB에 부동산 기사 추가."""
+    props = {
+        "이름": {"title": [{"text": {"content": title}}]},
+        "분야": {"multi_select": [{"name": "부동산"}]},
+        "상태": {"status": {"name": "읽기 전"}},
+    }
+    if url:
+        props["원문 URL"] = {"url": url}
+    if impact:
+        props["Impact"] = {"select": {"name": impact}}
+    if clip_date:
+        props["발견일"] = {"date": {"start": clip_date.isoformat()}}
+    SESSION.post(f"https://api.notion.com/v1/pages",
+                 headers={"Authorization": f"Bearer {notion_token}",
+                          "Notion-Version": "2022-06-28", "Content-Type": "application/json"},
+                 json={"parent": {"database_id": news_db_id}, "properties": props},
+                 timeout=25)
+
+
 def load_guide_sections(path):
     """마크다운 가이드 파일을 '## ' 헤더 기준으로 섹션 분리.
     반환: [(제목, 본문), ...] 첫 요소는 최상단 인트로(# 제목 + 요약 블록)."""
@@ -722,30 +787,6 @@ def render_funding_plan_editor(profile_path):
                   f" (목표가는 '내 구매력 현황'에서 수정)")
 
 
-NOTE_CATEGORIES = ["세금", "대출", "계약", "청약", "실전팁", "용어", "법률", "기타"]
-NOTE_CAT_COLORS = {"세금": "#e5484d", "대출": "#2f6feb", "계약": "#2f9e63", "청약": "#8b5cf6",
-                   "실전팁": "#c98a00", "용어": "#6b7280", "법률": "#0ea5e9", "기타": "#a3a3a3"}
-
-
-def load_knowledge_notes(path):
-    if not os.path.exists(path):
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def save_knowledge_notes(path, notes):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(notes, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
-
-
-def load_guide_progress(path):
     if not os.path.exists(path):
         return {}
     try:
@@ -862,6 +903,7 @@ with st.sidebar:
         "BLDG_REG_API_KEY": os.getenv("BLDG_REG_API_KEY", ""),
         "KAKAO_API_KEY": os.getenv("KAKAO_API_KEY", ""),
         "KAKAO_JS_KEY": os.getenv("KAKAO_JS_KEY", ""),
+        "NEWS_DB_ID": os.getenv("NEWS_DB_ID", ""),
     }
     _all_loaded = all([_env_keys["NOTION_TOKEN"], _env_keys["NOTION_DATABASE_ID"],
                        _env_keys["JUSO_API_KEY"], _env_keys["BLDG_REG_API_KEY"]])
@@ -880,6 +922,8 @@ with st.sidebar:
         bldg_key = st.text_input("건축물대장/실거래가 API 키", value=_env_keys["BLDG_REG_API_KEY"], type="password")
         kakao_key = st.text_input("카카오 REST API 키", value=_env_keys["KAKAO_API_KEY"], type="password")
         kakao_js_key = st.text_input("카카오 JavaScript 키", value=_env_keys["KAKAO_JS_KEY"], type="password")
+        news_db_id = st.text_input("뉴스 클리핑 DB ID", value=_env_keys["NEWS_DB_ID"],
+                                   help="기존 노션 '뉴스 클리핑' DB의 ID (없으면 해당 탭 비활성)")
         st.caption("💡 [공공데이터포털](https://www.data.go.kr) | [노션 API](https://www.notion.so/my-integrations)")
         st.caption("💡 카카오 JS키: [개발자콘솔](https://developers.kakao.com/console/app) → 플랫폼 키")
 
@@ -925,7 +969,7 @@ if schema:
             for nm, typ, desc in _missing:
                 st.markdown(f"- **{nm}** · `{typ}` — {desc}")
 
-TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "📖 매수 가이드", "💰 자금 계산기", "📝 부동산 노트"]
+TAB_LABELS = ["📊 대시보드", "➕ 새 매물 입력", "📋 매물 목록", "🗺️ 임장 지도", "📖 매수 가이드", "💰 자금 계산기", "📰 뉴스 클리핑"]
 if "active_tab" not in st.session_state:
     st.session_state["active_tab"] = TAB_LABELS[0]
 active_tab = st.radio("메뉴", TAB_LABELS, horizontal=True,
@@ -2016,96 +2060,90 @@ elif active_tab == TAB_LABELS[5]:
         except Exception as e:
             st.error(f"매물 목록 조회 실패: {friendly_error(e)}")
 
-# ════════════════ 탭 6: 부동산 노트 ════════════════
+# ════════════════ 탭 6: 뉴스 클리핑 ════════════════
 elif active_tab == TAB_LABELS[6]:
-    st.subheader("📝 부동산 노트")
-    st.caption("뉴스·SNS·상담에서 주워들은 부동산 지식을 카테고리별로 스크랩해두세요.")
+    st.subheader("📰 뉴스 클리핑")
+    st.caption("기존 노션 '뉴스 클리핑' DB에서 부동산 분야만 필터링해 보여줘요.")
 
-    _notes_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge_notes.json")
-    _notes = load_knowledge_notes(_notes_path)
-
-    # ── 새 노트 추가 ──
-    with st.expander("➕ 새 노트 추가", expanded=not bool(_notes)):
-        with st.form("add_note_form", clear_on_submit=True):
-            _nc1, _nc2 = st.columns([1, 2])
-            with _nc1:
-                _n_cat = st.selectbox("카테고리", NOTE_CATEGORIES)
-            with _nc2:
-                _n_title = st.text_input("제목", placeholder="예) 전세 계약갱신청구권 5% 상한 적용 시점")
-            _n_body = st.text_area("내용", placeholder="알게 된 내용을 자유롭게 적어두세요.\n마크다운 문법도 지원돼요.",
-                                   height=120)
-            _n_source = st.text_input("출처 (선택)", placeholder="예) 호갱노노 블로그, 부동산 카페, 세무사 상담 등")
-            if st.form_submit_button("💾 저장", type="primary"):
-                if _n_title.strip():
-                    _notes.insert(0, {
-                        "id": hashlib.md5(f"{_n_title}{time.time()}".encode()).hexdigest()[:8],
-                        "cat": _n_cat, "title": _n_title.strip(), "body": _n_body.strip(),
-                        "source": _n_source.strip(), "date": date.today().isoformat(),
-                    })
-                    save_knowledge_notes(_notes_path, _notes)
-                    st.success("✅ 저장 완료!")
-                    st.rerun()
-                else:
-                    st.warning("제목을 입력해주세요.")
-
-    if not _notes:
-        st.info("저장된 노트가 없어요. 위에서 첫 번째 노트를 추가해보세요!")
+    if not news_db_id:
+        st.warning("사이드바에서 '뉴스 클리핑 DB ID'를 입력해주세요. "
+                   "기존 노션 뉴스 클리핑 DB의 ID를 넣으면 부동산 기사만 필터링해서 보여줍니다.")
     else:
-        # ── 카테고리 필터 ──
-        _all_cats = sorted(set(n.get("cat", "기타") for n in _notes))
-        _filter_cats = st.multiselect("카테고리 필터", _all_cats, default=_all_cats,
-                                      label_visibility="collapsed")
-        _filtered_notes = [n for n in _notes if n.get("cat", "기타") in _filter_cats]
-        st.caption(f"총 {len(_notes)}개 노트 중 {len(_filtered_notes)}개 표시")
+        # ── 새 기사 추가 ──
+        with st.expander("➕ 기사 추가", expanded=False):
+            with st.form("add_clip_form", clear_on_submit=True):
+                _nc1, _nc2 = st.columns([2, 1])
+                with _nc1:
+                    _n_title = st.text_input("기사 제목", placeholder="예) 서울 아파트 전세가 연초 대비 3.2% 상승")
+                with _nc2:
+                    _n_impact = st.selectbox("중요도", ["(선택 안 함)"] + NEWS_IMPACT_OPTIONS)
+                _nc3, _nc4 = st.columns([2, 1])
+                with _nc3:
+                    _n_url = st.text_input("원문 URL", placeholder="https://...")
+                with _nc4:
+                    _n_date = st.date_input("날짜", value=date.today(), format="YYYY-MM-DD")
+                if st.form_submit_button("💾 저장", type="primary"):
+                    if _n_title.strip():
+                        try:
+                            add_news_clip(notion_token, news_db_id, _n_title.strip(),
+                                         _n_url.strip() or None,
+                                         _n_impact if _n_impact != "(선택 안 함)" else None,
+                                         _n_date)
+                            st.success("✅ 저장 완료! 노션에서도 확인할 수 있어요.")
+                            st.cache_data.clear(); st.rerun()
+                        except Exception as e:
+                            st.error(f"저장 실패: {friendly_error(e)}")
+                    else:
+                        st.warning("제목을 입력해주세요.")
 
-        # ── 노트 목록 ──
-        for _note in _filtered_notes:
-            _cat_color = NOTE_CAT_COLORS.get(_note.get("cat", "기타"), "#a3a3a3")
-            _header = (f"<span style='font-size:11px;font-weight:700;color:{_cat_color};"
-                       f"background:{_cat_color}1a;padding:2px 8px;border-radius:5px;'>"
-                       f"{_note.get('cat','기타')}</span> &nbsp;"
-                       f"**{_note.get('title','')}**")
-            with st.expander(_header, expanded=False):
-                if _note.get("body"):
-                    st.markdown(_note["body"])
-                _meta_parts = []
-                if _note.get("source"):
-                    _meta_parts.append(f"📎 {_note['source']}")
-                if _note.get("date"):
-                    _meta_parts.append(f"📅 {_note['date']}")
-                if _meta_parts:
-                    st.caption(" · ".join(_meta_parts))
+        # ── 기사 목록 ──
+        try:
+            _clips = load_news_clips(notion_token, news_db_id)
+        except Exception as e:
+            _clips = []
+            st.error(f"뉴스 클리핑 로드 실패: {friendly_error(e)}")
 
-                # 수정/삭제
-                _edit_key = f"edit_{_note['id']}"
-                _ec1, _ec2 = st.columns([1, 1])
-                with _ec1:
-                    if st.button("✏️ 수정", key=f"btn_edit_{_note['id']}", use_container_width=True):
-                        st.session_state[_edit_key] = True
-                with _ec2:
-                    if st.button("🗑️ 삭제", key=f"btn_del_{_note['id']}", use_container_width=True):
-                        _notes = [n for n in _notes if n["id"] != _note["id"]]
-                        save_knowledge_notes(_notes_path, _notes)
-                        st.success("삭제 완료")
-                        st.rerun()
+        if not _clips:
+            st.info("부동산 분야 기사가 아직 없어요. 위에서 첫 번째 기사를 추가해보세요!")
+        else:
+            _fc1, _fc2, _fc3 = st.columns([1, 1, 1])
+            with _fc1:
+                _filt_status = st.selectbox("상태", ["전체"] + NEWS_STATUS_OPTIONS, key="news_status_f")
+            with _fc2:
+                _filt_impact = st.selectbox("중요도", ["전체"] + NEWS_IMPACT_OPTIONS, key="news_impact_f")
+            with _fc3:
+                _filt_fav = st.toggle("⭐ 즐겨찾기만", value=False, key="news_fav_f")
 
-                if st.session_state.get(_edit_key):
-                    with st.form(key=f"form_edit_{_note['id']}"):
-                        _e_cat = st.selectbox("카테고리", NOTE_CATEGORIES,
-                                              index=NOTE_CATEGORIES.index(_note["cat"]) if _note.get("cat") in NOTE_CATEGORIES else 0)
-                        _e_title = st.text_input("제목", value=_note.get("title", ""))
-                        _e_body = st.text_area("내용", value=_note.get("body", ""), height=120)
-                        _e_source = st.text_input("출처", value=_note.get("source", ""))
-                        if st.form_submit_button("💾 수정 저장", type="primary"):
-                            for n in _notes:
-                                if n["id"] == _note["id"]:
-                                    n.update({"cat": _e_cat, "title": _e_title.strip(),
-                                              "body": _e_body.strip(), "source": _e_source.strip()})
-                                    break
-                            save_knowledge_notes(_notes_path, _notes)
-                            st.session_state.pop(_edit_key, None)
-                            st.success("✅ 수정 완료!")
-                            st.rerun()
+            _filtered = _clips
+            if _filt_status != "전체":
+                _filtered = [c for c in _filtered if c["상태"] == _filt_status]
+            if _filt_impact != "전체":
+                _filtered = [c for c in _filtered if c["중요도"] == _filt_impact]
+            if _filt_fav:
+                _filtered = [c for c in _filtered if c["즐겨찾기"]]
 
-        st.caption("💾 노트는 서버의 `knowledge_notes.json`에 저장돼요. "
-                  "Streamlit Cloud 무료 플랜에서는 앱이 재시작(reboot)되면 초기화될 수 있어요.")
+            st.caption(f"총 {len(_clips)}개 중 {len(_filtered)}개 표시")
+
+            for _clip in _filtered:
+                _imp_color = NEWS_IMPACT_COLORS.get(_clip["중요도"], "#9a9aa3")
+                _imp_badge = (f"<span style='font-size:11px;font-weight:700;color:{_imp_color};"
+                             f"background:{_imp_color}1a;padding:2px 8px;border-radius:5px;'>"
+                             f"{_clip['중요도'] or '—'}</span>") if _clip["중요도"] else ""
+                _status_txt = f"<span style='font-size:11px;color:#9a9aa3;'>[{_clip['상태']}]</span>" if _clip["상태"] else ""
+                _fav_txt = " ⭐" if _clip["즐겨찾기"] else ""
+                _date_txt = _clip["날짜"] or ""
+
+                _title_html = _clip["제목"]
+                if _clip["URL"]:
+                    _title_html = f"<a href='{_clip['URL']}' target='_blank' style='color:inherit;text-decoration:none;border-bottom:1px dashed #ccc;'>{_clip['제목']}</a>"
+
+                st.markdown(
+                    f"<div style='background:#fff;border:1px solid #ececef;border-radius:10px;"
+                    f"padding:12px 16px;margin-bottom:6px;'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:flex-start;'>"
+                    f"<div style='flex:1;min-width:0;'>"
+                    f"<div style='font-weight:700;font-size:14px;'>{_title_html}{_fav_txt}</div>"
+                    f"<div style='font-size:12px;color:#9a9aa3;margin-top:4px;'>"
+                    f"{_date_txt} {_status_txt}</div></div>"
+                    f"<div style='margin-left:12px;'>{_imp_badge}</div></div></div>",
+                    unsafe_allow_html=True)
